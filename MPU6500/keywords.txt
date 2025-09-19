@@ -1,0 +1,10 @@
+MPU6500	KEYWORD1
+begin	KEYWORD2
+readRaw	KEYWORD2
+readAccelG	KEYWORD2
+readGyroDps	KEYWORD2
+setAccelRange	KEYWORD2
+setGyroRange	KEYWORD2
+setDlpf	KEYWORD2
+setSampleRateDivider	KEYWORD2
+calibrate	KEYWORD2
