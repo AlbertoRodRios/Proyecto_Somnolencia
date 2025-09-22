@@ -10,10 +10,11 @@ def writeHeaders():
             "gz_rms", "gz_var", "gz_energy", "gz_ptp", "gz_skew", "gz_kurt",
             "xcorr_ax_ay", "xcorr_ax_az","xcorr_ay_az","xcorr_gx_gy","xcorr_gx_gz","xcorr_gy_gz",
             "ppg_rms", "ppg_var", "ppg_energy", "ppg_ptp", "ppg_skew", "ppg_kurt",
+            "ppg_B0_frac", "ppg_B1_frac", "ppg_B2_frac", "acc_L_frac", "acc_M_frac", "gyro_L_frac","gyro_M_frac",
             "awake"]
         writer.writerow(headers)
 awake = True  # Cambiar a False si se quiere etiquetar como somnoliento        
-filename = "features.csv"
+filename = "features2.csv"
 file_exists = os.path.exists(filename)
 action = 'a' if file_exists else 'w'
 
@@ -26,7 +27,7 @@ with open(filename, action, newline='', encoding="utf-8") as features_csv:
         if esp32.readline().decode(errors="ignore").strip() == "READY":
             break
     count = 0
-    MAX_ROWS = 50 #Limitar a N filas
+    MAX_ROWS = 20 #Limitar a N filas
     while count < MAX_ROWS:
         line = esp32.readline().decode(errors="ignore").strip()
         line += ","

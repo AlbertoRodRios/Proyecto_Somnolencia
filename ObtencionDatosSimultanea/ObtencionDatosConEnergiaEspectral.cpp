@@ -6,21 +6,26 @@
 #include <string.h>   // memcpy, memmove
 #include "esp_timer.h"
 
+// ====== TOGGLE ESPECTRAL (NUEVO) ======
+#define ENABLE_SPECTRAL   1   // 1: calcula +7 espectrales; 0: desactiva
+#define PRINT_ONLY_55     1   // 1: solo imprime 55; 0: imprime 48 y además 55
+
 // ====== CONFIG ======
-#define FS_IMU_HZ    200      // IMU 200 Hz
-#define WINDOW_SEC   2.0f     // 2 s
-#define OVERLAP      0.5f     // 50%
-#define USE_G_IN_MPS2 1       // 1: convertir 'g' a m/s^2 (opcional)
-#define SDA_PIN 21
-#define SCL_PIN 22
-#define I2C_ADDR_MPU 0x68 
-#define I2C_ADDR_MAX 0x57
-#define FS_PPG_HZ 100         // Hz
-#define USE_IR 1 
+#define FS_IMU_HZ         200    // IMU 200 Hz
+#define WINDOW_SEC        2.0f   // 2 s
+#define OVERLAP           0.5f   // 50%
+#define USE_G_IN_MPS2     1      // 1: convertir 'g' a m/s^2 (opcional)
+#define SDA_PIN           21
+#define SCL_PIN           22
+#define I2C_ADDR_MPU      0x68 
+#define I2C_ADDR_MAX      0x57
+#define FS_PPG_HZ         100    // Hz
+#define USE_IR            1 
 
 // Objetos
 MPU6500 mpu;
 MAX30105 ppg;
+struct FFTWork; 
 
 // ====== DERIVED SIZES ======
 constexpr int IMU_WIN = int(WINDOW_SEC * FS_IMU_HZ);      // 2s -> 400
@@ -218,6 +223,122 @@ void printFeaturesCSV(const float* f, int n){
   Serial.println();
 }
 
+// ====== ESPECTRAL (NUEVO) ======
+#if ENABLE_SPECTRAL
+#include <arduinoFFT.h>
+
+// Parámetros FFT
+constexpr int N_PPG  = 256;   // 2 s @100 Hz (~200 -> zero-pad a 256)
+constexpr int N_IMU  = 512;   // 2 s @200 Hz (~400 -> zero-pad a 512)
+
+// Ventanas y buffers reutilizables
+static float hann_ppg[N_PPG], hann_imu[N_IMU];
+static float vReal_ppg[N_PPG], vImag_ppg[N_PPG];
+static float vReal_imu[N_IMU], vImag_imu[N_IMU];
+
+// CONTEXTO para pasar punteros y metadatos a las rutinas
+struct FFTWork {
+  float* vReal;
+  float* vImag;
+  int    N;
+  float  fs;
+  const float* hann;
+};
+
+// “descriptores” para PPG e IMU
+static FFTWork W_PPG { vReal_ppg, vImag_ppg, N_PPG, (float)FS_PPG_HZ, hann_ppg };
+static FFTWork W_IMU { vReal_imu, vImag_imu, N_IMU, (float)FS_IMU_HZ, hann_imu };
+
+inline void precomputeHann(float* w, int N) {
+  const float kTwoPi = 6.283185307179586f;   // NO usar 'twoPi' (macro de la lib)
+  for (int i=0;i<N;++i) {
+    w[i] = 0.5f*(1.0f - cosf(kTwoPi * i / (N - 1)));
+  }
+}
+
+inline int hz2bin(float f, float fs, int N) {
+  int k = int((f * N) / fs + 0.5f);
+  if (k < 0) k = 0;
+  if (k > N/2) k = N/2;
+  return k;
+}
+
+// Fracción de energía en banda [f1,f2]
+float bandpower_frac_window(const float* x_win, const FFTWork& W, float f1, float f2) {
+  // 1) quitar DC y aplicar ventana Hann en vReal; vImag=0
+  float mu = 0.f;
+  for (int i=0;i<W.N;++i) mu += x_win[i];
+  mu /= (float)W.N;
+
+  for (int i=0;i<W.N;++i) {
+    W.vReal[i] = (x_win[i] - mu) * W.hann[i];
+    W.vImag[i] = 0.f;
+  }
+
+  // 2) Ejecutar FFT usando la API template (opera sobre los buffers del objeto)
+  ArduinoFFT<float> fft(W.vReal, W.vImag, (uint16_t)W.N, W.fs, false);
+  // Si quisieras, puedes quitar DC residual:
+  // fft.DCRemoval();
+  fft.compute(FFTDirection::Forward);
+  fft.complexToMagnitude();   // ahora vReal[k] = |X[k]|
+
+  // 3) Potencia + sumas
+  float Etot = 0.f;
+  for (int k=0; k<=W.N/2; ++k) {
+    float p = W.vReal[k]*W.vReal[k];
+    W.vReal[k] = p;           // reaprovechamos vReal como espectro de potencia
+    Etot += p;
+  }
+
+  int k1 = hz2bin(f1, W.fs, W.N);
+  int k2 = hz2bin(f2, W.fs, W.N);
+  if (k2 < k1) { int t=k1; k1=k2; k2=t; }
+
+  float E = 0.f;
+  for (int k=k1; k<=k2; ++k) E += W.vReal[k];
+
+  const float eps = 1e-12f;
+  return E / (Etot + eps);
+}
+
+// Calcula las 7 espectrales sobre ppg_win + magnitudes de IMU
+void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
+                          const float* ax, const float* ay, const float* az, int n_imu,
+                          const float* gx, const float* gy, const float* gz,
+                          float out7[7]) {
+  // 1) PPG -> copiar/zero-pad a 256
+  static float tmp_ppg[N_PPG];
+  memset(tmp_ppg, 0, sizeof(tmp_ppg));
+  int c_ppg = (n_ppg < N_PPG ? n_ppg : N_PPG);
+  memcpy(tmp_ppg, ppg_ir, sizeof(float) * c_ppg);
+
+  // Bandas PPG: B0=0.10–0.40, B1=0.70–3.00, B2=3.00–5.00
+  out7[0] = bandpower_frac_window(tmp_ppg, W_PPG, 0.10f, 0.40f); // ppg_B0_frac
+  out7[1] = bandpower_frac_window(tmp_ppg, W_PPG, 0.70f, 3.00f); // ppg_B1_frac
+  out7[2] = bandpower_frac_window(tmp_ppg, W_PPG, 3.00f, 5.00f); // ppg_B2_frac
+
+  // 2) Magnitudes IMU (|a|, |g|) -> zero-pad a 512
+  static float acc_mag[N_IMU], gyro_mag[N_IMU];
+  int c_imu = (n_imu < N_IMU ? n_imu : N_IMU);
+  for (int i=0;i<c_imu;++i) {
+    float axv=ax[i], ayv=ay[i], azv=az[i];
+    float gxv=gx[i], gyv=gy[i], gzv=gz[i];
+    acc_mag[i]  = sqrtf(axv*axv + ayv*ayv + azv*azv);
+    gyro_mag[i] = sqrtf(gxv*gxv + gyv*gyv + gzv*gzv);
+  }
+  for (int i=c_imu;i<N_IMU;++i){ acc_mag[i]=0.f; gyro_mag[i]=0.f; }
+
+  // Bandas IMU: L=0.30–3.00, M=3.00–12.00
+  out7[3] = bandpower_frac_window(acc_mag,  W_IMU, 0.30f, 3.00f);   // acc_L_frac
+  out7[4] = bandpower_frac_window(acc_mag,  W_IMU, 3.00f, 12.00f);  // acc_M_frac
+  out7[5] = bandpower_frac_window(gyro_mag, W_IMU, 0.30f, 3.00f);   // gyro_L_frac
+  out7[6] = bandpower_frac_window(gyro_mag, W_IMU, 3.00f, 12.00f);  // gyro_M_frac
+}
+#endif
+// ====== /ESPECTRAL (NUEVO) ======
+
+
+// ====== EMISIÓN ======
 void maybeEmitOnce() {
   // ¿cuántos hops pendientes tiene cada flujo?
   unsigned long imu_hops = (imu_total > last_total_mpu) 
@@ -251,7 +372,31 @@ void maybeEmitOnce() {
     float feats48[48];
     memcpy(feats48,      feats_imu, sizeof(feats_imu));
     memcpy(feats48 + 42, feats_ppg, sizeof(feats_ppg));
+
+#if ENABLE_SPECTRAL
+    // ====== ESPECTRAL (NUEVO): calcular +7 y emitir según bandera ======
+    float spec7[7];
+    computeSpectralPlus7(ppg_win, PPG_WIN,
+                         ax_win, ay_win, az_win, IMU_WIN,
+                         gx_win, gy_win, gz_win,
+                         spec7);
+
+    if (PRINT_ONLY_55) {
+      float feats55[55];
+      memcpy(feats55, feats48, sizeof(feats48));
+      memcpy(feats55 + 48, spec7, sizeof(spec7));
+      printFeaturesCSV(feats55, 55);   // imprime SOLO 55
+    } else {
+      printFeaturesCSV(feats48, 48);   // imprime 48 (comportamiento original intacto)
+      float feats55[55];
+      memcpy(feats55, feats48, sizeof(feats48));
+      memcpy(feats55 + 48, spec7, sizeof(spec7));
+      printFeaturesCSV(feats55, 55);   // imprime también 55 (segunda fila)
+    }
+#else
+    // ====== MODO ORIGINAL ======
     printFeaturesCSV(feats48, 48);
+#endif
   }
 }
 
@@ -314,6 +459,12 @@ void setup() {
     }
   }
   Serial.println("READY"); 
+
+#if ENABLE_SPECTRAL
+  // Precalcular Hann
+  precomputeHann(hann_ppg, N_PPG);
+  precomputeHann(hann_imu, N_IMU);
+#endif
 }
 
 // ====== LOOP ======
@@ -332,5 +483,5 @@ void loop() {
     ppgSample();
   }
 
-    maybeEmitOnce();
+  maybeEmitOnce();
 }
