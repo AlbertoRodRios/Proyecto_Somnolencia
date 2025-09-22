@@ -87,11 +87,6 @@ inline float xcorr0(const float* a, const float* b, int n){
     return (float)(num/(den+1e-18));
 }
 
-inline void demean(float* x, int n){
-    float m = mean(x,n);
-    for(int i=0;i<n;++i) x[i]-=m;
-}
-
 // ====== READ SENSORS ======
 void onIMUTick_task(void* /*arg*/) {
     portENTER_CRITICAL(&timerMux);
