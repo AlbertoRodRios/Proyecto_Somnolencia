@@ -163,7 +163,7 @@ void computeFeatures_fromCopies(float* out42,
 // ====== PRINT CSV ======
 void printFeaturesCSV(const float* f, int n){
     for(int i=0;i<n;++i){
-        Serial.print(f[i], 6);
+        Serial.print(f[i], 4);
         if (i<n-1) Serial.print(',');
     }
     Serial.println();
@@ -171,7 +171,7 @@ void printFeaturesCSV(const float* f, int n){
 
 // ====== SETUP ======
 void setup() {
-    Serial.begin(115200);
+    Serial.begin(921600);
     delay(300);
     Wire.begin(SDA_PIN, SCL_PIN);
     Wire.setClock(400000);
@@ -196,13 +196,20 @@ void setup() {
     targs.name = "imu200hz";
     ESP_ERROR_CHECK(esp_timer_create(&targs, &imu_timer));
     ESP_ERROR_CHECK(esp_timer_start_periodic(imu_timer, 1000000ULL / FS_IMU_HZ)); // 200 Hz
-
+    bool ready = false;
+    while(!ready){
+        if(Serial.available()){
+            String s = Serial.readStringUntil('\n');
+            s.trim();
+            if(s=="READY") ready=true;
+        }
+    }
     Serial.println("READY"); 
 }
 
 // ====== LOOP ======
 void loop() {
-    if (imu_ready > 0){
+    while (imu_ready > 0){
         portENTER_CRITICAL(&timerMux);
         imu_ready--;
         portEXIT_CRITICAL(&timerMux);
@@ -210,20 +217,18 @@ void loop() {
     }
 
     static unsigned long last_total = 0;
-    if (imu_widx >= IMU_WIN) {
-        if (imu_total - last_total >= IMU_HOP) {   // <-- usa el contador monótono
-        last_total = imu_total;
-        // copias y features (igual que lo tienes)
-        memcpy(ax_win, ax_buf, sizeof(ax_win));
-        memcpy(ay_win, ay_buf, sizeof(ay_win));
-        memcpy(az_win, az_buf, sizeof(az_win));
-        memcpy(gx_win, gx_buf, sizeof(gx_win));
-        memcpy(gy_win, gy_buf, sizeof(gy_win));
-        memcpy(gz_win, gz_buf, sizeof(gz_win));
-
+    static unsigned long last_total = 0;
+    while (imu_widx >= IMU_WIN && (imu_total - last_total) >= IMU_HOP) {
+        last_total += IMU_HOP;                // avanza solo un hop lógico
+        memcpy(ax_win, ax_buf, sizeof ax_win);
+        memcpy(ay_win, ay_buf, sizeof ay_win);
+        memcpy(az_win, az_buf, sizeof az_win);
+        memcpy(gx_win, gx_buf, sizeof gx_win);
+        memcpy(gy_win, gy_buf, sizeof gy_win);
+        memcpy(gz_win, gz_buf, sizeof gz_win);
         float feats[42];
         computeFeatures_fromCopies(feats, ax_win, ay_win, az_win, gx_win, gy_win, gz_win);
         printFeaturesCSV(feats, 42);
-        }
-    } 
+    }
+ 
 }
