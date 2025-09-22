@@ -43,6 +43,9 @@ volatile int ppg_widx = 0;
 volatile int ppg_ready = 0;
 volatile unsigned long ppg_total = 0;
 
+static unsigned long last_total_mpu = 0;
+static unsigned long last_total_ppg = 0;
+
 // ====== TIMERS ======
 esp_timer_handle_t imu_timer;
 esp_timer_handle_t ppg_timer;
@@ -215,6 +218,43 @@ void printFeaturesCSV(const float* f, int n){
   Serial.println();
 }
 
+void maybeEmitOnce() {
+  // ¿cuántos hops pendientes tiene cada flujo?
+  unsigned long imu_hops = (imu_total > last_total_mpu) 
+                           ? (imu_total - last_total_mpu) / (unsigned long)IMU_HOP : 0UL;
+  unsigned long ppg_hops = (ppg_total > last_total_ppg) 
+                           ? (ppg_total - last_total_ppg) / (unsigned long)PPG_HOP : 0UL;
+
+  // Emite SOLO si ambos tienen ≥1 hop pendiente
+  if (imu_hops >= 1UL && ppg_hops >= 1UL) {
+    // Avanza ambos contadores para descartar backlog completo (nos quedamos con la ventana más reciente)
+    unsigned long min_hops = (imu_hops < ppg_hops) ? imu_hops : ppg_hops;
+    last_total_mpu += min_hops * (unsigned long)IMU_HOP;
+    last_total_ppg += min_hops * (unsigned long)PPG_HOP;
+
+    // Copias locales de la última ventana COMPLETA
+    memcpy(ax_win, ax_buf, sizeof ax_win);
+    memcpy(ay_win, ay_buf, sizeof ay_win);
+    memcpy(az_win, az_buf, sizeof az_win);
+    memcpy(gx_win, gx_buf, sizeof gx_win);
+    memcpy(gy_win, gy_buf, sizeof gy_win);
+    memcpy(gz_win, gz_buf, sizeof gz_win);
+    memcpy(ppg_win, ppg_buf, sizeof ppg_win);
+
+    // Features
+    float feats_imu[42];
+    float feats_ppg[6];
+    computeMPUFeatures_fromCopies(feats_imu, ax_win, ay_win, az_win, gx_win, gy_win, gz_win);
+    computePPGFeatures_fromCopies(feats_ppg, ppg_win, PPG_WIN);
+
+    // Concatena y emite una sola fila (48)
+    float feats48[48];
+    memcpy(feats48,      feats_imu, sizeof(feats_imu));
+    memcpy(feats48 + 42, feats_ppg, sizeof(feats_ppg));
+    printFeaturesCSV(feats48, 48);
+  }
+}
+
 // ====== SETUP ======
 void setup() {
   Serial.begin(115200);
@@ -292,38 +332,5 @@ void loop() {
     ppgSample();
   }
 
-  // --- SINCRONIZACIÓN: emitir 48 feats cuando AMBOS tienen hop disponible ---
-  static unsigned long last_total_mpu = 0;
-  static unsigned long last_total_ppg = 0;
-
-  while (imu_widx >= IMU_WIN &&
-         ppg_widx >= PPG_WIN &&
-         (imu_total - last_total_mpu) >= (unsigned long)IMU_HOP &&
-         (ppg_total - last_total_ppg) >= (unsigned long)PPG_HOP) {
-
-    // avanza un hop en ambos (1 s)
-    last_total_mpu += (unsigned long)IMU_HOP;
-    last_total_ppg += (unsigned long)PPG_HOP;
-
-    // copias locales (evita condiciones de carrera)
-    memcpy(ax_win, ax_buf, sizeof ax_win);
-    memcpy(ay_win, ay_buf, sizeof ay_win);
-    memcpy(az_win, az_buf, sizeof az_win);
-    memcpy(gx_win, gx_buf, sizeof gx_win);
-    memcpy(gy_win, gy_buf, sizeof gy_win);
-    memcpy(gz_win, gz_buf, sizeof gz_win);
-    memcpy(ppg_win, ppg_buf, sizeof ppg_win);
-
-    // computa
-    float feats_imu[42];
-    float feats_ppg[6];
-    computeMPUFeatures_fromCopies(feats_imu, ax_win, ay_win, az_win, gx_win, gy_win, gz_win);
-    computePPGFeatures_fromCopies(feats_ppg, ppg_win, PPG_WIN);
-
-    // concatena 42 + 6 = 48 y envía una sola línea
-    float feats48[48];
-    memcpy(feats48, feats_imu, sizeof(feats_imu));
-    memcpy(feats48 + 42, feats_ppg, sizeof(feats_ppg));
-    printFeaturesCSV(feats48, 48);
-  }
+    maybeEmitOnce();
 }
