@@ -2,8 +2,8 @@
 #include <Wire.h>
 #include <MPU6500.h>
 #include "MAX30105.h"
-#include <math.h>     // sqrtf
-#include <string.h>   // memcpy, memmove
+#include <math.h>     
+#include <string.h>   
 #include "esp_timer.h"
 
 // ====== TOGGLE ESPECTRAL (NUEVO) ======
@@ -335,8 +335,6 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
   out7[6] = bandpower_frac_window(gyro_mag, W_IMU, 3.00f, 12.00f);  // gyro_M_frac
 }
 #endif
-// ====== /ESPECTRAL (NUEVO) ======
-
 
 // ====== EMISIÓN ======
 void maybeEmitOnce() {
@@ -374,7 +372,6 @@ void maybeEmitOnce() {
     memcpy(feats48 + 42, feats_ppg, sizeof(feats_ppg));
 
 #if ENABLE_SPECTRAL
-    // ====== ESPECTRAL (NUEVO): calcular +7 y emitir según bandera ======
     float spec7[7];
     computeSpectralPlus7(ppg_win, PPG_WIN,
                          ax_win, ay_win, az_win, IMU_WIN,
@@ -407,7 +404,6 @@ void setup() {
   Wire.begin(SDA_PIN, SCL_PIN);
   Wire.setClock(400000);
 
-  // CORRECCIÓN: usar I2C_ADDR_MPU
   while (!mpu.begin(Wire, I2C_ADDR_MPU)) {
     Serial.println("MPU6500 no detectado. Reintentando en 1 segundo...");
     delay(1000);
