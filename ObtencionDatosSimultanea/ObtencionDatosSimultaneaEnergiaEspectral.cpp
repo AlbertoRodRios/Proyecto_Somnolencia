@@ -8,7 +8,6 @@
 
 // ====== TOGGLE ESPECTRAL (NUEVO) ======
 #define ENABLE_SPECTRAL   1   // 1: calcula +7 espectrales; 0: desactiva
-#define PRINT_ONLY_55     1   // 1: solo imprime 55; 0: imprime 48 y además 55
 
 // ====== CONFIG ======
 #define FS_IMU_HZ         200    // IMU 200 Hz
@@ -263,42 +262,48 @@ inline int hz2bin(float f, float fs, int N) {
   return k;
 }
 
-// Fracción de energía en banda [f1,f2]
-float bandpower_frac_window(const float* x_win, const FFTWork& W, float f1, float f2) {
-  // 1) quitar DC y aplicar ventana Hann en vReal; vImag=0
+// Fracción de energía en banda [f1,f2] con:
+// - media calculada SOLO sobre muestras válidas (sin contaminar por el padding)
+// - exclusión del bin DC (k=0) en Etot y en la banda
+float bandpower_frac_window(const float* x_win, int valid_n,
+                            const FFTWork& W, float f1, float f2) {
+  // 1) Media sólo de la parte válida
   float mu = 0.f;
-  for (int i=0;i<W.N;++i) mu += x_win[i];
-  mu /= (float)W.N;
+  for (int i = 0; i < valid_n; ++i) mu += x_win[i];
+  mu /= (float)valid_n;
 
-  for (int i=0;i<W.N;++i) {
-    W.vReal[i] = (x_win[i] - mu) * W.hann[i];
+  // 2) Cargar buffer FFT: válidos centrados en mu con Hann; resto = 0
+  for (int i = 0; i < W.N; ++i) {
+    float x = (i < valid_n ? (x_win[i] - mu) : 0.f);
+    W.vReal[i] = x * W.hann[i];
     W.vImag[i] = 0.f;
   }
 
-  // 2) Ejecutar FFT usando la API template (opera sobre los buffers del objeto)
+  // 3) FFT → magnitud
   ArduinoFFT<float> fft(W.vReal, W.vImag, (uint16_t)W.N, W.fs, false);
-  // Si quisieras, puedes quitar DC residual:
-  // fft.DCRemoval();
+  // fft.DCRemoval();  // opcional (ya restamos la media correctamente)
   fft.compute(FFTDirection::Forward);
-  fft.complexToMagnitude();   // ahora vReal[k] = |X[k]|
+  fft.complexToMagnitude();   // vReal[k] = |X[k]|
 
-  // 3) Potencia + sumas
+  // 4) Potencia y sumas (excluir DC: k=0)
   float Etot = 0.f;
-  for (int k=0; k<=W.N/2; ++k) {
-    float p = W.vReal[k]*W.vReal[k];
-    W.vReal[k] = p;           // reaprovechamos vReal como espectro de potencia
+  for (int k = 1; k <= W.N/2; ++k) {
+    float p = W.vReal[k] * W.vReal[k];
+    W.vReal[k] = p;   // reutiliza vReal como espectro de potencia
     Etot += p;
   }
 
+  // 5) Límites de banda en bins (garantizar k>=1)
   int k1 = hz2bin(f1, W.fs, W.N);
   int k2 = hz2bin(f2, W.fs, W.N);
-  if (k2 < k1) { int t=k1; k1=k2; k2=t; }
+  if (k2 < k1) { int t = k1; k1 = k2; k2 = t; }
+  if (k1 < 1) k1 = 1;              // excluye DC
+  if (k2 > W.N/2) k2 = W.N/2;
 
   float E = 0.f;
-  for (int k=k1; k<=k2; ++k) E += W.vReal[k];
+  for (int k = k1; k <= k2; ++k) E += W.vReal[k];
 
-  const float eps = 1e-12f;
-  return E / (Etot + eps);
+  return E / (Etot + 1e-12f);
 }
 
 // Calcula las 7 espectrales sobre ppg_win + magnitudes de IMU
@@ -313,9 +318,9 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
   memcpy(tmp_ppg, ppg_ir, sizeof(float) * c_ppg);
 
   // Bandas PPG: B0=0.10–0.40, B1=0.70–3.00, B2=3.00–5.00
-  out7[0] = bandpower_frac_window(tmp_ppg, W_PPG, 0.10f, 0.40f); // ppg_B0_frac
-  out7[1] = bandpower_frac_window(tmp_ppg, W_PPG, 0.70f, 3.00f); // ppg_B1_frac
-  out7[2] = bandpower_frac_window(tmp_ppg, W_PPG, 3.00f, 5.00f); // ppg_B2_frac
+  out7[0] = bandpower_frac_window(tmp_ppg, c_ppg, W_PPG, 0.10f, 0.40f); // ppg_B0_frac
+  out7[1] = bandpower_frac_window(tmp_ppg, c_ppg, W_PPG, 0.70f, 3.00f); // ppg_B1_frac
+  out7[2] = bandpower_frac_window(tmp_ppg, c_ppg, W_PPG, 3.00f, 5.00f); // ppg_B2_frac
 
   // 2) Magnitudes IMU (|a|, |g|) -> zero-pad a 512
   static float acc_mag[N_IMU], gyro_mag[N_IMU];
@@ -329,15 +334,16 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
   for (int i=c_imu;i<N_IMU;++i){ acc_mag[i]=0.f; gyro_mag[i]=0.f; }
 
   // Bandas IMU: L=0.30–3.00, M=3.00–12.00
-  out7[3] = bandpower_frac_window(acc_mag,  W_IMU, 0.30f, 3.00f);   // acc_L_frac
-  out7[4] = bandpower_frac_window(acc_mag,  W_IMU, 3.00f, 12.00f);  // acc_M_frac
-  out7[5] = bandpower_frac_window(gyro_mag, W_IMU, 0.30f, 3.00f);   // gyro_L_frac
-  out7[6] = bandpower_frac_window(gyro_mag, W_IMU, 3.00f, 12.00f);  // gyro_M_frac
+  out7[3] = bandpower_frac_window(acc_mag, c_imu, W_IMU, 0.30f, 3.00f);   // acc_L_frac
+  out7[4] = bandpower_frac_window(acc_mag, c_imu, W_IMU, 3.00f, 12.00f);  // acc_M_frac
+  out7[5] = bandpower_frac_window(gyro_mag, c_imu, W_IMU, 0.30f, 3.00f);   // gyro_L_frac
+  out7[6] = bandpower_frac_window(gyro_mag, c_imu, W_IMU, 3.00f, 12.00f);  // gyro_M_frac
 }
 #endif
 
 // ====== EMISIÓN ======
 void maybeEmitOnce() {
+  if (imu_widx < IMU_WIN || ppg_widx < PPG_WIN) return;
   // ¿cuántos hops pendientes tiene cada flujo?
   unsigned long imu_hops = (imu_total > last_total_mpu) 
                            ? (imu_total - last_total_mpu) / (unsigned long)IMU_HOP : 0UL;
@@ -378,18 +384,10 @@ void maybeEmitOnce() {
                          gx_win, gy_win, gz_win,
                          spec7);
 
-    if (PRINT_ONLY_55) {
-      float feats55[55];
-      memcpy(feats55, feats48, sizeof(feats48));
-      memcpy(feats55 + 48, spec7, sizeof(spec7));
-      printFeaturesCSV(feats55, 55);   // imprime SOLO 55
-    } else {
-      printFeaturesCSV(feats48, 48);   // imprime 48 (comportamiento original intacto)
-      float feats55[55];
-      memcpy(feats55, feats48, sizeof(feats48));
-      memcpy(feats55 + 48, spec7, sizeof(spec7));
-      printFeaturesCSV(feats55, 55);   // imprime también 55 (segunda fila)
-    }
+    float feats55[55];
+    memcpy(feats55, feats48, sizeof(feats48));
+    memcpy(feats55 + 48, spec7, sizeof(spec7));
+    printFeaturesCSV(feats55, 55);
 #else
     // ====== MODO ORIGINAL ======
     printFeaturesCSV(feats48, 48);

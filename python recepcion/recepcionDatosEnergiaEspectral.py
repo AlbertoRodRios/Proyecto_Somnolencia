@@ -13,8 +13,14 @@ def writeHeaders():
             "ppg_B0_frac", "ppg_B1_frac", "ppg_B2_frac", "acc_L_frac", "acc_M_frac", "gyro_L_frac","gyro_M_frac",
             "awake"]
         writer.writerow(headers)
+ 
+def getRowsFromTime(seconds):
+    if seconds < 2:
+        return 0
+    return (seconds - 1) 
+
 awake = True  # Cambiar a False si se quiere etiquetar como somnoliento        
-filename = "features2.csv"
+filename = "featuresSomnolencia.csv"
 file_exists = os.path.exists(filename)
 action = 'a' if file_exists else 'w'
 
@@ -27,11 +33,11 @@ with open(filename, action, newline='', encoding="utf-8") as features_csv:
         if esp32.readline().decode(errors="ignore").strip() == "READY":
             break
     count = 0
-    MAX_ROWS = 20 #Limitar a N filas
+    MAX_ROWS = getRowsFromTime(300) #Limitar a N filas según tiempo en segundos
     while count < MAX_ROWS:
         line = esp32.readline().decode(errors="ignore").strip()
         line += ","
-        line += "1" if awake else "0"  # Aquí se puede cambiar a "0" si se quiere etiquetar como somnoliento
+        line += "1" if awake else "0"
         if not line:
             continue
         print(f"{count}: {line}")
