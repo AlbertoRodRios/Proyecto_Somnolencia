@@ -184,7 +184,6 @@ static inline void add_channel_mpu(const float* x, int n, int idxBase, float /*f
 
 void computePPGFeatures_fromCopies(float* out7, const float* x, int n){
   float mu = mean(x,n);
-  (void)mu; // no imprescindible, pero útil si quisieras var(x,n,mu)
   out7[0] = rms(x,n);
   out7[1] = var(x,n);         
   out7[2] = energy(x,n);
