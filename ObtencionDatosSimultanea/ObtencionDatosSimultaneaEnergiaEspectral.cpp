@@ -6,9 +6,6 @@
 #include <string.h>   
 #include "esp_timer.h"
 
-// ====== TOGGLE ESPECTRAL (NUEVO) ======
-#define ENABLE_SPECTRAL   1   // 1: calcula +7 espectrales; 0: desactiva
-
 // ====== CONFIG ======
 #define FS_IMU_HZ         200    // IMU 200 Hz
 #define WINDOW_SEC        2.0f   // 2 s
@@ -154,11 +151,8 @@ void ppgSample(){
 
   // Drenar TODO el FIFO disponible
   while (ppg.available()) {
-    uint32_t ir  = ppg.getIR();
-    uint32_t red = ppg.getRed();
+    uint32_t sample  = (float)ppg.getIR();
     ppg.nextSample();
-
-    float sample = USE_IR ? (float)ir : (float)red;
 
     if (ppg_widx >= PPG_WIN){
       // Desplaza por HOP
@@ -451,11 +445,8 @@ void setup() {
   }
   Serial.println("READY"); 
 
-#if ENABLE_SPECTRAL
-  // Precalcular Hann
   precomputeHann(hann_ppg, N_PPG);
   precomputeHann(hann_imu, N_IMU);
-#endif
 }
 
 // ====== LOOP ======
