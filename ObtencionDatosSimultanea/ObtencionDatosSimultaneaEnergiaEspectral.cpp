@@ -20,7 +20,7 @@
 #define FeaturesIMU      (6*FeaturesPerChannel + 6) // 42 + 6 xcorr
 #define FeaturesPPG       FeaturesPerChannel         // 7
 #define TotalFeatures     FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
-
+#define USE_Python 1  // 1: enviar a Python; 0: enviar a Serial Monitor
 // Objetos
 MPU6500 mpu;
 MAX30105 ppg;
@@ -435,6 +435,7 @@ void setup() {
   ESP_ERROR_CHECK(esp_timer_start_periodic(ppg_timer, 1000000ULL / FS_PPG_HZ));
 
   // Handshake con PC para empezar
+  #if USE_Python
   bool ready = false;
   while(!ready){
     if(Serial.available()){
@@ -443,8 +444,9 @@ void setup() {
       if(s=="READY") ready=true;
     }
   }
-  Serial.println("READY"); 
-
+  Serial.println("READY");
+  #endif
+  
   precomputeHann(hann_ppg, N_PPG);
   precomputeHann(hann_imu, N_IMU);
 }
