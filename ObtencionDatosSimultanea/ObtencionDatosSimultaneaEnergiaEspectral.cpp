@@ -9,7 +9,7 @@
 //   - PPG: 0.10-0.40 Hz, 0.70-3.00 Hz, 3.00-5.00 Hz
 //   - IMU (magnitud): 0.30-3.00 Hz, 3.00-12.00 Hz (acelerómetro y giróscopo)
 // - Emisión por Serial Monitor o a Python (62 características por ventana)
-// - Plataforma: ESP32 (ESP32 DevKitC v4)
+// - Plataforma: ESP32 (ESP32 WROOM-32)
 // - Librerías: ArduinoFFT, MPU6500, SparkFun MAX3010x5
 // - Fecha: octubre 2024
 // Librerías
@@ -37,8 +37,9 @@
 #define FeaturesIMU         6 * FeaturesPerChannel + 6 // 42 + 6 xcorr
 #define FeaturesPPG         FeaturesPerChannel         // 7
 #define TotalFeatures       FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
-#define USE_PYTHON          1  // 1: enviar a Python; 0: enviar a Serial Monitor
+#define USE_PYTHON          0  // 1: enviar a Python; 0: enviar a Serial Monitor
 #define USE_IR              1  // 1: usar IR; 0: usar RED
+#define DEBUG               1 // 1: debug info por Serial; 0: nada (No Usar con Python)
 
 // Objetos
 MPU6500 mpu;
@@ -161,11 +162,33 @@ inline float xcorr0(const float* a, const float* b, int n){
 void onIMUTick_task(void* /*arg*/) {
   portENTER_CRITICAL(&timerMux); // proteger variables compartidas
   imu_ready++; // flag para loop
+
+  #if DEBUG
+    static unsigned long last = 0;
+    unsigned long now = esp_timer_get_time();
+    if (last != 0){
+      unsigned long dt = now - last;
+      Serial.print("IMU dt (us): "); Serial.println(dt);
+    }
+    last = now;
+  #endif
+
   portEXIT_CRITICAL(&timerMux); // liberar mutex
 }
 void onPPGTick_task(void* /*arg*/){
   portENTER_CRITICAL(&timerMux); // proteger variables compartidas
   ppg_ready++; // flag para loop
+
+  #if DEBUG
+    static unsigned long last = 0;
+    unsigned long now = esp_timer_get_time();
+    if (last != 0){
+      unsigned long dt = now - last;
+      Serial.print("PPG dt (us): "); Serial.println(dt);
+    }
+    last = now;
+  #endif
+
   portEXIT_CRITICAL(&timerMux); // liberar mutex
 }
 
@@ -181,7 +204,7 @@ void imuSample(){
   #endif
 
   if (imu_widx >= IMU_WIN){
-    memmove(ax_buf, ax_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP)); 
+    memmove(ax_buf, ax_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
     memmove(ay_buf, ay_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP)); 
     memmove(az_buf, az_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
     memmove(gx_buf, gx_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
@@ -193,6 +216,19 @@ void imuSample(){
   gx_buf[imu_widx] = gx; gy_buf[imu_widx] = gy; gz_buf[imu_widx] = gz;
   imu_widx++;
   imu_total++;
+
+  #if DEBUG
+    static int count = 0;
+    if (count++ % 100 == 0) {
+      Serial.print("IMU sample: ax="); Serial.print(ax); 
+      Serial.print(", ay="); Serial.print(ay);
+      Serial.print(", az="); Serial.print(az);
+      Serial.print(", gx="); Serial.print(gx);
+      Serial.print(", gy="); Serial.print(gy);
+      Serial.print(", gz="); Serial.println(gz);
+    }
+  #endif
+
 }
 
 // Toma muestras del PPG y las almacena en el buffer circular
@@ -216,6 +252,14 @@ void ppgSample(){
     ppg_buf[ppg_widx++] = sample;
     ppg_total++;
   }
+
+   #if DEBUG
+    static int count = 0;
+    if (count++ % 100 == 0) {
+      Serial.print("PPG sample: ");
+      Serial.println(sample);
+    }
+  #endif
 }
 
 // calcula y añade las 7 características de un canal en out[idxBase..idxBase+6]
@@ -262,6 +306,16 @@ void computeMPUFeatures_fromCopies(float* out48,
   out48[idx++] = xcorr0(gx, gy, IMU_WIN);
   out48[idx++] = xcorr0(gx, gz, IMU_WIN);
   out48[idx++] = xcorr0(gy, gz, IMU_WIN);
+
+  #if DEBUG
+    Serial.println("Características IMU calculadas:");
+    for (int i=0; i<48; i++) {
+      Serial.print(out48[i], 6);
+      Serial.print(", ");
+    }
+    Serial.println();
+  #endif
+
 }
 
 // Print features as CSV line
@@ -379,6 +433,10 @@ void maybeEmitOnce() {
 
   // Emite SOLO si ambos tienen ≥1 hop pendiente
   if (imu_hops >= 1UL && ppg_hops >= 1UL) {
+    #if DEBUG
+      Serial.println("Emisión de ventana de características...");
+    #endif
+
     // Avanza ambos contadores para descartar backlog completo (nos quedamos con la ventana más reciente)
     unsigned long min_hops = (imu_hops < ppg_hops) ? imu_hops : ppg_hops;
     last_total_mpu += min_hops * (unsigned long)IMU_HOP;
@@ -413,27 +471,52 @@ void maybeEmitOnce() {
     memcpy(feats62, feats55, sizeof(feats55));
     memcpy(feats62 + 55, spec7, sizeof(spec7));
     printFeaturesCSV(feats62, 62);
+    #if DEBUG
+      Serial.print("Total características: ");
+      Serial.println(TotalFeatures);
+      Serial.println("Features IMU + PPG + Espectrales:");
+      for (int i=0; i<TotalFeatures; i++) {
+        Serial.print(feats62[i], 6);
+        Serial.print(", ");
+      }
+      Serial.println();
+    #endif
   }
 }
 
 // Setup inicial
 void setup() {
   Serial.begin(BADIOS); 
-  delay(300);
+  delay(1000);
   Wire.begin(SDA_PIN, SCL_PIN); // inicia I2C
   Wire.setClock(400000); // 400 kHz
 
-  // Inicializa sensores (reintenta hasta que conecte)
-  // MPU6500
+   // Debug: Iniciando inicialización
+  #if DEBUG
+    Serial.println("Iniciando inicialización de sensores...");
+  #endif
+
+  // Inicializa MPU6500
   while (!mpu.begin(Wire, I2C_ADDR_MPU)) {
-    Serial.println("MPU6500 no detectado. Reintentando en 1 segundo...");
+    #if DEBUG
+      Serial.println("MPU6500 no detectado. Reintentando en 1 segundo...");
+    #endif
     delay(1000);
   }
-  // MAX30102
+  #if DEBUG
+    Serial.println("MPU6500 inicializado correctamente.");
+  #endif
+
+  // Inicializa MAX30102
   while(!ppg.begin(Wire, 400000, I2C_ADDR_MAX)){
-    Serial.println("MAX30102 no detectado. Reintentando en 1 segundo...");
+    #if DEBUG
+      Serial.println("MAX30102 no detectado. Reintentando en 1 segundo...");
+    #endif
     delay(1000);
   }
+  #if DEBUG
+    Serial.println("MAX30102 inicializado correctamente.");
+  #endif
 
   // RANGOS y FILTRO para 200 Hz
   // MPU6500

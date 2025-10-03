@@ -1,4 +1,5 @@
 import serial, csv, os
+import time
 def writeHeaders():
     if not file_exists:
         headers = [
@@ -6,8 +7,8 @@ def writeHeaders():
             "ay_rms", "ay_var", "ay_energy", "ay_ptp", "ay_skew", "ay_kurt", "ay_mean",
             "az_rms", "az_var", "az_energy", "az_ptp", "az_skew", "az_kurt", "az_mean",
             "gx_rms", "gx_var", "gx_energy", "gx_ptp", "gx_skew", "gx_kurt", "gx_mean",
-            "gy_rms", "gy_var", "gy_energy", "gy_ptp", "gy_skew", "gy_kurt", "gx_mean",
-            "gz_rms", "gz_var", "gz_energy", "gz_ptp", "gz_skew", "gz_kurt", "gx_mean",
+            "gy_rms", "gy_var", "gy_energy", "gy_ptp", "gy_skew", "gy_kurt", "gy_mean",
+            "gz_rms", "gz_var", "gz_energy", "gz_ptp", "gz_skew", "gz_kurt", "gz_mean",
             "xcorr_ax_ay", "xcorr_ax_az","xcorr_ay_az","xcorr_gx_gy","xcorr_gx_gz","xcorr_gy_gz",
             "ppg_rms", "ppg_var", "ppg_energy", "ppg_ptp", "ppg_skew", "ppg_kurt", "ppg_mean",
             "ppg_B0_frac", "ppg_B1_frac", "ppg_B2_frac", "acc_L_frac", "acc_M_frac", "gyro_L_frac","gyro_M_frac",
@@ -20,12 +21,13 @@ def getRowsFromTime(seconds):
     return (seconds - 1) 
 
 awake = True  # Cambiar a False si se quiere etiquetar como somnoliento
-port =  "COM3"  # Cambiar al puerto correcto si es necesario      
+port =  "COM3"  # Cambiar al puerto correcto si es necesario  
+badios = 115200 # Velocidad de comunicación 
 filename = "featuresSomnolencia.csv"
 file_exists = os.path.exists(filename)
 action = 'a' if file_exists else 'w'
 
-esp32 = serial.Serial(port, 115200,timeout=500)
+esp32 = serial.Serial(port, badios, timeout=0.5)
 with open(filename, action, newline='', encoding="utf-8") as features_csv:
     writer = csv.writer(features_csv)
     writeHeaders()
@@ -33,6 +35,7 @@ with open(filename, action, newline='', encoding="utf-8") as features_csv:
     while True:
         if esp32.readline().decode(errors="ignore").strip() == "READY":
             break
+        time.sleep(0.1) 
     count = 0
     MAX_ROWS = getRowsFromTime(300) #Limitar a N filas según tiempo en segundos
     while count < MAX_ROWS:
