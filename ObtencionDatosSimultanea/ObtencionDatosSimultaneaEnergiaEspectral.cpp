@@ -23,7 +23,7 @@
 #include <arduinoFFT.h>
 
 // Defines
-#define BADIOS            115200  // velocidad serial
+#define BADIOS              115200  // velocidad serial
 #define FS_IMU_HZ           200    // IMU 200 Hz
 #define FS_PPG_HZ           100    // PPG 100 Hz
 #define WINDOW_SEC          2.0f   // 2 s
