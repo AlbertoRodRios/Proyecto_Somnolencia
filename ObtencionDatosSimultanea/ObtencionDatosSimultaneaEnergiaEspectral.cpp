@@ -1,3 +1,18 @@
+// ObtencionDatosSimultaneaEnergiaEspectral.cpp
+// Obtención de datos simultánea de MPU6500 (IMU) y MAX30102
+// Extrae características estadísticas y espectrales en ventanas deslizantes
+// - IMU: acelerómetro y giróscopo a 200 Hz
+// - PPG: MAX30102 (IR o RED) a 100 Hz
+// - Ventanas de 2 s con 50% de solapamiento
+// - Características estadísticas: RMS, varianza, energía, pico a pico, asimetría, curtosis y media (7 por canal)
+// - Características espectrales: fracción de energía en bandas específicas (7 en total
+//   - PPG: 0.10-0.40 Hz, 0.70-3.00 Hz, 3.00-5.00 Hz
+//   - IMU (magnitud): 0.30-3.00 Hz, 3.00-12.00 Hz (acelerómetro y giróscopo)
+// - Emisión por Serial Monitor o a Python (62 características por ventana)
+// - Plataforma: ESP32 (ESP32 DevKitC v4)
+// - Librerías: ArduinoFFT, MPU6500, SparkFun MAX3010x5
+// - Fecha: octubre 2024
+// Librerías
 #include <Arduino.h>
 #include <Wire.h>
 #include <MPU6500.h>
@@ -5,37 +20,47 @@
 #include <math.h>     
 #include <string.h>   
 #include "esp_timer.h"
+#include <arduinoFFT.h>
 
-// ====== CONFIG ======
-#define FS_IMU_HZ         200    // IMU 200 Hz
-#define WINDOW_SEC        2.0f   // 2 s
-#define OVERLAP           0.5f   // 50%
-#define USE_G_IN_MPS2     1      // 1: convertir 'g' a m/s^2 (opcional)
-#define SDA_PIN           21
-#define SCL_PIN           22
-#define I2C_ADDR_MPU      0x68 
-#define I2C_ADDR_MAX      0x57
-#define FS_PPG_HZ         100    // Hz
-#define FeaturesPerChannel 7
-#define FeaturesIMU      (6*FeaturesPerChannel + 6) // 42 + 6 xcorr
-#define FeaturesPPG       FeaturesPerChannel         // 7
-#define TotalFeatures     FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
-#define USE_Python 1  // 1: enviar a Python; 0: enviar a Serial Monitor
-#define USE_IR     1  // 1: usar IR; 0: usar RED
-
+// Defines
+#define BADIOS            115200  // velocidad serial
+#define FS_IMU_HZ           200    // IMU 200 Hz
+#define FS_PPG_HZ           100    // PPG 100 Hz
+#define WINDOW_SEC          2.0f   // 2 s
+#define OVERLAP             0.5f   // 50%
+#define USE_G_IN_MPS2       1      // 1: convertir 'g' a m/s^2 (opcional)
+#define SDA_PIN             21     // GPIO21
+#define SCL_PIN             22     // GPIO22
+#define I2C_ADDR_MPU        0x68   // MPU6500
+#define I2C_ADDR_MAX        0x57   // MAX30102
+#define FeaturesPerChannel  7      // 7 características por canal
+#define FeaturesIMU         6 * FeaturesPerChannel + 6 // 42 + 6 xcorr
+#define FeaturesPPG         FeaturesPerChannel         // 7
+#define TotalFeatures       FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
+#define USE_PYTHON          1  // 1: enviar a Python; 0: enviar a Serial Monitor
+#define USE_IR              1  // 1: usar IR; 0: usar RED
 
 // Objetos
 MPU6500 mpu;
 MAX30105 ppg;
 struct FFTWork; 
 
-// ====== DERIVED SIZES ======
+// CONTEXTO para pasar punteros y metadatos a las rutinas
+struct FFTWork {
+  float* vReal;
+  float* vImag;
+  int    N;
+  float  fs;
+  const float* hann;
+};
+
+// Tamaños de ventana y hop
 constexpr int IMU_WIN = int(WINDOW_SEC * FS_IMU_HZ);      // 2s -> 400
 constexpr int IMU_HOP = int(IMU_WIN * (1.0f - OVERLAP));  // 200
-constexpr int PPG_WIN = int(WINDOW_SEC * FS_PPG_HZ);      // 200
+constexpr int PPG_WIN = int(WINDOW_SEC * FS_PPG_HZ);      // 2s -> 200
 constexpr int PPG_HOP = int(PPG_WIN * (1.0f - OVERLAP));  // 100
 
-// ====== BUFFERS ======
+// Buffers y variables globales
 static float ax_win[IMU_WIN], ay_win[IMU_WIN], az_win[IMU_WIN];
 static float gx_win[IMU_WIN], gy_win[IMU_WIN], gz_win[IMU_WIN];
 static float ax_buf[IMU_WIN], ay_buf[IMU_WIN], az_buf[IMU_WIN];
@@ -43,90 +68,112 @@ static float gx_buf[IMU_WIN], gy_buf[IMU_WIN], gz_buf[IMU_WIN];
 static float ppg_buf[PPG_WIN];
 static float ppg_win[PPG_WIN];
 
-volatile int imu_widx = 0;   // write index IMU
+volatile int imu_widx = 0;   // inddex escritura IMU
 volatile int imu_ready = 0;  // flags desde ISR
-volatile unsigned long imu_total = 0;
-volatile int ppg_widx = 0;
-volatile int ppg_ready = 0;
-volatile unsigned long ppg_total = 0;
+volatile unsigned long imu_total = 0; // total muestras IMU
+volatile int ppg_widx = 0; // index escritura PPG
+volatile int ppg_ready = 0; // flags desde ISR
+volatile unsigned long ppg_total = 0; // total muestras PPG
 
-static unsigned long last_total_mpu = 0;
-static unsigned long last_total_ppg = 0;
+static unsigned long last_total_mpu = 0; // para evitar backlog
+static unsigned long last_total_ppg = 0; // para evitar backlog
 
-// ====== TIMERS ======
-esp_timer_handle_t imu_timer;
-esp_timer_handle_t ppg_timer;
-portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED;
+// Parámetros FFT
+constexpr int N_PPG  = 256;   // 2 s @100 Hz (~200 -> zero-pad a 256)
+constexpr int N_IMU  = 512;   // 2 s @200 Hz (~400 -> zero-pad a 512)
 
-// ====== UTILS (stats) ======
+// Ventanas y buffers reutilizables
+static float hann_ppg[N_PPG], hann_imu[N_IMU];
+static float vReal_ppg[N_PPG], vImag_ppg[N_PPG];
+static float vReal_imu[N_IMU], vImag_imu[N_IMU];
+
+// “descriptores” para PPG e IMU
+static FFTWork W_PPG { vReal_ppg, vImag_ppg, N_PPG, (float)FS_PPG_HZ, hann_ppg };
+static FFTWork W_IMU { vReal_imu, vImag_imu, N_IMU, (float)FS_IMU_HZ, hann_imu };
+
+// Timers y sincronización
+esp_timer_handle_t imu_timer; // timer para IMU
+esp_timer_handle_t ppg_timer; // timer para PPG
+portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED; // mutex para variables compartidas
+
+// Utilidades estadísticas
+//Calculo Raíz Media Cuadrática
 inline float rms(const float* x, int n) {
   double s = 0.0;
-  for (int i=0;i<n;++i) s += (double)x[i]*x[i];
-  return sqrtf((float)(s/n) + 1e-12f);
+  for (int i=0;i<n;++i) s += (double)x[i]*x[i]; // suma de cuadrados;
+  return sqrtf((float)(s/n) + 1e-12f); // +1e-12f para evitar sqrt(0)
 }
+//Calculo Media aritmética
 inline float mean(const float* x, int n) {
-  double s=0.0; for (int i=0;i<n;++i) s += x[i]; return (float)(s/n);
+  double s=0.0; for (int i=0;i<n;++i) s += x[i]; // suma
+  return (float)(s/n); // media
 }
-// Varianza poblacional (la que ya usabas)
+//Calculo Varianza
 inline float var(const float* x, int n, float mu=-9999.0f) {
-  double s=0.0; float m = (mu==-9999.0f? mean(x,n): mu);
-  for (int i=0;i<n;++i){ double d = x[i]-m; s += d*d; }
+  double s=0.0; float m = (mu==-9999.0f? mean(x,n): mu); // media
+  for (int i=0;i<n;++i){ double d = x[i]-m; s += d*d; } // suma de cuadrados de diferencias de la media
   return (float)(s/n);
 }
+//Calculo Energía
 inline float energy(const float* x, int n) {
   double s=0.0; for (int i=0;i<n;++i) s += (double)x[i]*x[i];
   return (float)(s/n); // energía media (= RMS^2)
 }
+//Calculo Pico a Pico
 inline float ptp(const float* x, int n) {
   float mn=x[0], mx=x[0];
-  for (int i=1;i<n;++i){ if(x[i]<mn) mn=x[i]; if(x[i]>mx) mx=x[i]; }
+  for (int i=1;i<n;++i){ if(x[i]<mn) mn=x[i]; if(x[i]>mx) mx=x[i]; } // min y max
   return mx - mn;
 }
+//Calculo Asimetría
 inline float skewness(const float* x, int n) {
   if (n<3) return 0.0f;
-  float m = mean(x,n);
-  float s2 = 0.0f, s3 = 0.0f;
-  for (int i=0;i<n;++i){ float d=x[i]-m; s2 += d*d; s3 += d*d*d; }
-  s2 /= n; s3 /= n;
-  float sd = sqrtf(s2 + 1e-12f);
-  return (s3 / (sd*sd*sd + 1e-12f));
+  float m = mean(x,n); // media
+  float s2 = 0.0f, s3 = 0.0f; // varianza y tercer momento
+  for (int i=0;i<n;++i){ float d=x[i]-m; s2 += d*d; s3 += d*d*d; } 
+  s2 /= n; s3 /= n; // momentos
+  float sd = sqrtf(s2 + 1e-12f); // desviación típica
+  return (s3 / (sd*sd*sd + 1e-12f)); // asimetría
 }
+//Calculo Curtosis (exceso)
 inline float kurtosis_excess(const float* x, int n) {
   if (n<4) return 0.0f;
-  float m = mean(x,n);
-  double s2=0.0, s4=0.0;
-  for (int i=0;i<n;++i){ double d=x[i]-m; s2 += d*d; s4 += d*d*d*d; }
-  s2/=n; s4/=n;
-  double k = s4 / ((s2*s2)+1e-18);
+  float m = mean(x,n); // media
+  double s2=0.0, s4=0.0; // varianza y cuarto momento
+  for (int i=0;i<n;++i){ double d=x[i]-m; s2 += d*d; s4 += d*d*d*d; } 
+  s2/=n; s4/=n; // momentos
+  double k = s4 / ((s2*s2)+1e-18); // curtosis
   return (float)(k - 3.0); // exceso
 }
+//Calculo Correlación Cruzada Normalizada (lag=0)
 inline float xcorr0(const float* a, const float* b, int n){
-  float ma = mean(a,n), mb = mean(b,n);
-  double num=0.0, va=0.0, vb=0.0;
-  for(int i=0;i<n;++i){
-    double da=a[i]-ma, db=b[i]-mb;
-    num += da*db; va += da*da; vb += db*db;
+  float ma = mean(a,n), mb = mean(b,n); // medias
+  double num=0.0, va=0.0, vb=0.0; // numerador y varianzas
+  for(int i=0;i<n;++i){ 
+    double da=a[i]-ma, db=b[i]-mb; // diferencias
+    num += da*db; va += da*da; vb += db*db; // sumas
   }
-  double den = sqrt((va+1e-18)*(vb+1e-18));
-  return (float)(num/(den+1e-18));
+  double den = sqrt((va+1e-18)*(vb+1e-18)); // denominador
+  return (float)(num/(den+1e-18)); // correlación
 }
 
-// ====== READ SENSORS ======
+// Sensores y muestreo
 void onIMUTick_task(void* /*arg*/) {
-  portENTER_CRITICAL(&timerMux);
-  imu_ready++;
-  portEXIT_CRITICAL(&timerMux);
+  portENTER_CRITICAL(&timerMux); // proteger variables compartidas
+  imu_ready++; // flag para loop
+  portEXIT_CRITICAL(&timerMux); // liberar mutex
 }
 void onPPGTick_task(void* /*arg*/){
-  portENTER_CRITICAL(&timerMux);
-  ppg_ready++;
-  portEXIT_CRITICAL(&timerMux);
+  portENTER_CRITICAL(&timerMux); // proteger variables compartidas
+  ppg_ready++; // flag para loop
+  portEXIT_CRITICAL(&timerMux); // liberar mutex
 }
 
+// Toma una muestra de la IMU y la almacena en el buffer circular
 void imuSample(){
   float ax, ay, az, gx, gy, gz;
-  mpu.readAccelG(ax, ay, az);
-  mpu.readGyroDps(gx, gy, gz);
+  mpu.readAccelG(ax, ay, az); // aceleración en 'g'
+  mpu.readGyroDps(gx, gy, gz); // giro en dps
 
   #if USE_G_IN_MPS2
     const float G = 9.80665f;
@@ -134,8 +181,8 @@ void imuSample(){
   #endif
 
   if (imu_widx >= IMU_WIN){
-    memmove(ax_buf, ax_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
-    memmove(ay_buf, ay_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
+    memmove(ax_buf, ax_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP)); 
+    memmove(ay_buf, ay_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP)); 
     memmove(az_buf, az_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
     memmove(gx_buf, gx_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
     memmove(gy_buf, gy_buf+IMU_HOP, sizeof(float)*(IMU_WIN-IMU_HOP));
@@ -148,6 +195,7 @@ void imuSample(){
   imu_total++;
 }
 
+// Toma muestras del PPG y las almacena en el buffer circular
 void ppgSample(){
   // Mueve FIFO interno de la lib (no bloqueante)
   ppg.safeCheck(0);
@@ -170,8 +218,8 @@ void ppgSample(){
   }
 }
 
-// ====== FEATURES ======
-static inline void add_channel_mpu(const float* x, int n, int idxBase, float /*fsIMU*/, float* out){
+// calcula y añade las 7 características de un canal en out[idxBase..idxBase+6]
+static inline void add_channel_mpu(const float* x, int n, int idxBase, float* out){
   float mu = mean(x,n);
   out[idxBase+0] = rms(x,n);
   out[idxBase+1] = var(x,n, mu);
@@ -181,7 +229,7 @@ static inline void add_channel_mpu(const float* x, int n, int idxBase, float /*f
   out[idxBase+5] = kurtosis_excess(x,n);
   out[idxBase+6] = mu;
 }
-
+// Computa las 7 características desde copias locales (para evitar condición de carrera)
 void computePPGFeatures_fromCopies(float* out7, const float* x, int n){
   float mu = mean(x,n);
   out7[0] = rms(x,n);
@@ -198,15 +246,14 @@ void computeMPUFeatures_fromCopies(float* out48,
   const float* ax,const float* ay,const float* az,
   const float* gx,const float* gy,const float* gz)
 {
-  const float fsIMU = (float)FS_IMU_HZ;
   int idx = 0;
 
-  add_channel_mpu(ax, IMU_WIN, idx, fsIMU, out48); idx+=7;
-  add_channel_mpu(ay, IMU_WIN, idx, fsIMU, out48); idx+=7;
-  add_channel_mpu(az, IMU_WIN, idx, fsIMU, out48); idx+=7;
-  add_channel_mpu(gx, IMU_WIN, idx, fsIMU, out48); idx+=7;
-  add_channel_mpu(gy, IMU_WIN, idx, fsIMU, out48); idx+=7;
-  add_channel_mpu(gz, IMU_WIN, idx, fsIMU, out48); idx+=7;
+  add_channel_mpu(ax, IMU_WIN, idx, out48); idx+=7;
+  add_channel_mpu(ay, IMU_WIN, idx, out48); idx+=7;
+  add_channel_mpu(az, IMU_WIN, idx, out48); idx+=7;
+  add_channel_mpu(gx, IMU_WIN, idx, out48); idx+=7;
+  add_channel_mpu(gy, IMU_WIN, idx, out48); idx+=7;
+  add_channel_mpu(gz, IMU_WIN, idx, out48); idx+=7;
 
   // xcorr (6)
   out48[idx++] = xcorr0(ax, ay, IMU_WIN);
@@ -217,7 +264,7 @@ void computeMPUFeatures_fromCopies(float* out48,
   out48[idx++] = xcorr0(gy, gz, IMU_WIN);
 }
 
-// ====== PRINT CSV ======
+// Print features as CSV line
 void printFeaturesCSV(const float* f, int n){
   for(int i=0;i<n;++i){
     Serial.print(f[i], 6);
@@ -226,31 +273,7 @@ void printFeaturesCSV(const float* f, int n){
   Serial.println();
 }
 
-// ====== ESPECTRAL (NUEVO) ======
-#include <arduinoFFT.h>
-
-// Parámetros FFT
-constexpr int N_PPG  = 256;   // 2 s @100 Hz (~200 -> zero-pad a 256)
-constexpr int N_IMU  = 512;   // 2 s @200 Hz (~400 -> zero-pad a 512)
-
-// Ventanas y buffers reutilizables
-static float hann_ppg[N_PPG], hann_imu[N_IMU];
-static float vReal_ppg[N_PPG], vImag_ppg[N_PPG];
-static float vReal_imu[N_IMU], vImag_imu[N_IMU];
-
-// CONTEXTO para pasar punteros y metadatos a las rutinas
-struct FFTWork {
-  float* vReal;
-  float* vImag;
-  int    N;
-  float  fs;
-  const float* hann;
-};
-
-// “descriptores” para PPG e IMU
-static FFTWork W_PPG { vReal_ppg, vImag_ppg, N_PPG, (float)FS_PPG_HZ, hann_ppg };
-static FFTWork W_IMU { vReal_imu, vImag_imu, N_IMU, (float)FS_IMU_HZ, hann_imu };
-
+// Precompute Hann window (para FFT)
 inline void precomputeHann(float* w, int N) {
   const float kTwoPi = 6.283185307179586f;   // NO usar 'twoPi' (macro de la lib)
   for (int i=0;i<N;++i) {
@@ -258,6 +281,8 @@ inline void precomputeHann(float* w, int N) {
   }
 }
 
+// Convierte frecuencia (Hz) a bin FFT (0..N/2)
+// - fs: frecuencia de muestreo
 inline int hz2bin(float f, float fs, int N) {
   int k = int((f * N) / fs + 0.5f);
   if (k < 0) k = 0;
@@ -284,7 +309,6 @@ float bandpower_frac_window(const float* x_win, int valid_n,
 
   // 3) FFT → magnitud
   ArduinoFFT<float> fft(W.vReal, W.vImag, (uint16_t)W.N, W.fs, false);
-  // fft.DCRemoval();  // opcional (ya restamos la media correctamente)
   fft.compute(FFTDirection::Forward);
   fft.complexToMagnitude();   // vReal[k] = |X[k]|
 
@@ -343,10 +367,11 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
   out7[6] = bandpower_frac_window(gyro_mag, c_imu, W_IMU, 3.00f, 12.00f);  // gyro_M_frac
 }
 
-// ====== EMISIÓN ======
+// Emite UNA ventana si ambos flujos tienen ≥1 hop pendiente
 void maybeEmitOnce() {
-  if (imu_widx < IMU_WIN || ppg_widx < PPG_WIN) return;
-  // ¿cuántos hops pendientes tiene cada flujo?
+  if (imu_widx < IMU_WIN || ppg_widx < PPG_WIN) return; // no hay ventana completa
+
+  // Hops pendientes en cada flujo
   unsigned long imu_hops = (imu_total > last_total_mpu) 
                            ? (imu_total - last_total_mpu) / (unsigned long)IMU_HOP : 0UL;
   unsigned long ppg_hops = (ppg_total > last_total_ppg) 
@@ -391,30 +416,34 @@ void maybeEmitOnce() {
   }
 }
 
-// ====== SETUP ======
+// Setup inicial
 void setup() {
-  Serial.begin(115200);
+  Serial.begin(BADIOS); 
   delay(300);
-  Wire.begin(SDA_PIN, SCL_PIN);
-  Wire.setClock(400000);
+  Wire.begin(SDA_PIN, SCL_PIN); // inicia I2C
+  Wire.setClock(400000); // 400 kHz
 
+  // Inicializa sensores (reintenta hasta que conecte)
+  // MPU6500
   while (!mpu.begin(Wire, I2C_ADDR_MPU)) {
     Serial.println("MPU6500 no detectado. Reintentando en 1 segundo...");
     delay(1000);
   }
-
+  // MAX30102
   while(!ppg.begin(Wire, 400000, I2C_ADDR_MAX)){
     Serial.println("MAX30102 no detectado. Reintentando en 1 segundo...");
     delay(1000);
   }
 
   // RANGOS y FILTRO para 200 Hz
+  // MPU6500
   mpu.setAccelRange(MPU6500::ACCEL_4G);
   mpu.setGyroRange(MPU6500::GYRO_500DPS);
   mpu.setDlpf(3);               
   mpu.setSampleRateDivider(4);  
   mpu.calibrate(400);
 
+  // MAX30102
   ppg.setup(0x3F, /*avg=*/4, /*ledMode=*/2, /*rate=*/FS_PPG_HZ, /*pw=*/411, /*adc=*/16384);
   ppg.setPulseAmplitudeIR(0x3F);
   ppg.setPulseAmplitudeRed(0x3F);
@@ -439,8 +468,8 @@ void setup() {
   ESP_ERROR_CHECK(esp_timer_create(&targs_ppg, &ppg_timer));
   ESP_ERROR_CHECK(esp_timer_start_periodic(ppg_timer, 1000000ULL / FS_PPG_HZ));
 
-  // Handshake con PC para empezar
-  #if USE_Python
+  // Handshake con Python (opcional)
+  #if USE_PYTHON
   bool ready = false;
   while(!ready){
     if(Serial.available()){
@@ -451,14 +480,14 @@ void setup() {
   }
   Serial.println("READY");
   #endif
-  
+  // Precomputar ventanas Hann
   precomputeHann(hann_ppg, N_PPG);
   precomputeHann(hann_imu, N_IMU);
 }
 
-// ====== LOOP ======
+// Loop principal
 void loop() {
-  // --- drena flags y toma muestras ---
+  // Manejo de flags y muestreo
   while (imu_ready > 0){
     portENTER_CRITICAL(&timerMux);
     imu_ready--;
@@ -471,6 +500,5 @@ void loop() {
     portEXIT_CRITICAL(&timerMux);
     ppgSample();
   }
-
   maybeEmitOnce();
 }
