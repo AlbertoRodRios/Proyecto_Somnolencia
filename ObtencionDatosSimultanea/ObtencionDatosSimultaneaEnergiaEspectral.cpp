@@ -19,7 +19,10 @@
 #define I2C_ADDR_MPU      0x68 
 #define I2C_ADDR_MAX      0x57
 #define FS_PPG_HZ         100    // Hz
-#define USE_IR            1 
+#define FeaturesPerChannel 7
+#define FeaturesIMU      (6*FeaturesPerChannel + 6) // 42 + 6 xcorr
+#define FeaturesPPG       FeaturesPerChannel         // 7
+#define TotalFeatures     FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
 
 // Objetos
 MPU6500 mpu;
@@ -218,14 +221,13 @@ void computeMPUFeatures_fromCopies(float* out48,
 // ====== PRINT CSV ======
 void printFeaturesCSV(const float* f, int n){
   for(int i=0;i<n;++i){
-    Serial.print(f[i], 7);
+    Serial.print(f[i], FeaturesPerChannel);
     if (i<n-1) Serial.print(',');
   }
   Serial.println();
 }
 
 // ====== ESPECTRAL (NUEVO) ======
-#if ENABLE_SPECTRAL
 #include <arduinoFFT.h>
 
 // Parámetros FFT
@@ -341,7 +343,6 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
   out7[5] = bandpower_frac_window(gyro_mag, c_imu, W_IMU, 0.30f, 3.00f);   // gyro_L_frac
   out7[6] = bandpower_frac_window(gyro_mag, c_imu, W_IMU, 3.00f, 12.00f);  // gyro_M_frac
 }
-#endif
 
 // ====== EMISIÓN ======
 void maybeEmitOnce() {
@@ -369,29 +370,25 @@ void maybeEmitOnce() {
     memcpy(ppg_win, ppg_buf, sizeof ppg_win);
 
     // Features
-    float feats_imu[48];
-    float feats_ppg[7];
+    float feats_imu[FeaturesIMU];
+    float feats_ppg[FeaturesPPG];
     computeMPUFeatures_fromCopies(feats_imu, ax_win, ay_win, az_win, gx_win, gy_win, gz_win);
     computePPGFeatures_fromCopies(feats_ppg, ppg_win, PPG_WIN);
 
-    // Concatena y emite una sola fila (55)
-    float feats55[55];
+    // Concatena y emite una sola fila (62 features)
+    float feats55[FeaturesIMU + FeaturesPPG];
     memcpy(feats55,      feats_imu, sizeof(feats_imu));
     memcpy(feats55 + 48, feats_ppg, sizeof(feats_ppg));
-
-#if ENABLE_SPECTRAL
-    float spec7[7];
+    float spec7[FeaturesPerChannel];
     computeSpectralPlus7(ppg_win, PPG_WIN,
                          ax_win, ay_win, az_win, IMU_WIN,
                          gx_win, gy_win, gz_win,
                          spec7);
 
-    float feats62[62];
+    float feats62[TotalFeatures];
     memcpy(feats62, feats55, sizeof(feats55));
     memcpy(feats62 + 55, spec7, sizeof(spec7));
     printFeaturesCSV(feats62, 62);
-#else
-    printFeaturesCSV(feats55, 55);
   }
 }
 
