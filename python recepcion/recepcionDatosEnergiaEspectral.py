@@ -19,12 +19,13 @@ def getRowsFromTime(seconds):
         return 0
     return (seconds - 1) 
 
-awake = True  # Cambiar a False si se quiere etiquetar como somnoliento        
+awake = True  # Cambiar a False si se quiere etiquetar como somnoliento
+port =  "COM3"  # Cambiar al puerto correcto si es necesario      
 filename = "featuresSomnolencia.csv"
 file_exists = os.path.exists(filename)
 action = 'a' if file_exists else 'w'
 
-esp32 = serial.Serial("COM3", 115200,timeout=500)
+esp32 = serial.Serial(port, 115200,timeout=500)
 with open(filename, action, newline='', encoding="utf-8") as features_csv:
     writer = csv.writer(features_csv)
     writeHeaders()

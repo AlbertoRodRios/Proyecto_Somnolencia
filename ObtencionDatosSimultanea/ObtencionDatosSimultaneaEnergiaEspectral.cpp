@@ -176,47 +176,49 @@ static inline void add_channel_mpu(const float* x, int n, int idxBase, float /*f
   out[idxBase+3] = ptp(x,n);
   out[idxBase+4] = skewness(x,n);
   out[idxBase+5] = kurtosis_excess(x,n);
+  out[idxBase+6] = mu;
 }
 
-void computePPGFeatures_fromCopies(float* out6, const float* x, int n){
+void computePPGFeatures_fromCopies(float* out7, const float* x, int n){
   float mu = mean(x,n);
   (void)mu; // no imprescindible, pero útil si quisieras var(x,n,mu)
-  out6[0] = rms(x,n);
-  out6[1] = var(x,n);         
-  out6[2] = energy(x,n);
-  out6[3] = ptp(x,n);
-  out6[4] = skewness(x,n);
-  out6[5] = kurtosis_excess(x,n);
+  out7[0] = rms(x,n);
+  out7[1] = var(x,n);         
+  out7[2] = energy(x,n);
+  out7[3] = ptp(x,n);
+  out7[4] = skewness(x,n);
+  out7[5] = kurtosis_excess(x,n);
+  out7[6] = mu;
 }
 
 // Computa features desde copias locales (para evitar condición de carrera)
-void computeMPUFeatures_fromCopies(float* out42,
+void computeMPUFeatures_fromCopies(float* out48,
   const float* ax,const float* ay,const float* az,
   const float* gx,const float* gy,const float* gz)
 {
   const float fsIMU = (float)FS_IMU_HZ;
   int idx = 0;
 
-  add_channel_mpu(ax, IMU_WIN, idx, fsIMU, out42); idx+=6;
-  add_channel_mpu(ay, IMU_WIN, idx, fsIMU, out42); idx+=6;
-  add_channel_mpu(az, IMU_WIN, idx, fsIMU, out42); idx+=6;
-  add_channel_mpu(gx, IMU_WIN, idx, fsIMU, out42); idx+=6;
-  add_channel_mpu(gy, IMU_WIN, idx, fsIMU, out42); idx+=6;
-  add_channel_mpu(gz, IMU_WIN, idx, fsIMU, out42); idx+=6;
+  add_channel_mpu(ax, IMU_WIN, idx, fsIMU, out48); idx+=7;
+  add_channel_mpu(ay, IMU_WIN, idx, fsIMU, out48); idx+=7;
+  add_channel_mpu(az, IMU_WIN, idx, fsIMU, out48); idx+=7;
+  add_channel_mpu(gx, IMU_WIN, idx, fsIMU, out48); idx+=7;
+  add_channel_mpu(gy, IMU_WIN, idx, fsIMU, out48); idx+=7;
+  add_channel_mpu(gz, IMU_WIN, idx, fsIMU, out48); idx+=7;
 
   // xcorr (6)
-  out42[idx++] = xcorr0(ax, ay, IMU_WIN);
-  out42[idx++] = xcorr0(ax, az, IMU_WIN);
-  out42[idx++] = xcorr0(ay, az, IMU_WIN);
-  out42[idx++] = xcorr0(gx, gy, IMU_WIN);
-  out42[idx++] = xcorr0(gx, gz, IMU_WIN);
-  out42[idx++] = xcorr0(gy, gz, IMU_WIN);
+  out48[idx++] = xcorr0(ax, ay, IMU_WIN);
+  out48[idx++] = xcorr0(ax, az, IMU_WIN);
+  out48[idx++] = xcorr0(ay, az, IMU_WIN);
+  out48[idx++] = xcorr0(gx, gy, IMU_WIN);
+  out48[idx++] = xcorr0(gx, gz, IMU_WIN);
+  out48[idx++] = xcorr0(gy, gz, IMU_WIN);
 }
 
 // ====== PRINT CSV ======
 void printFeaturesCSV(const float* f, int n){
   for(int i=0;i<n;++i){
-    Serial.print(f[i], 6);
+    Serial.print(f[i], 7);
     if (i<n-1) Serial.print(',');
   }
   Serial.println();
@@ -367,15 +369,15 @@ void maybeEmitOnce() {
     memcpy(ppg_win, ppg_buf, sizeof ppg_win);
 
     // Features
-    float feats_imu[42];
-    float feats_ppg[6];
+    float feats_imu[48];
+    float feats_ppg[7];
     computeMPUFeatures_fromCopies(feats_imu, ax_win, ay_win, az_win, gx_win, gy_win, gz_win);
     computePPGFeatures_fromCopies(feats_ppg, ppg_win, PPG_WIN);
 
-    // Concatena y emite una sola fila (48)
-    float feats48[48];
-    memcpy(feats48,      feats_imu, sizeof(feats_imu));
-    memcpy(feats48 + 42, feats_ppg, sizeof(feats_ppg));
+    // Concatena y emite una sola fila (55)
+    float feats55[55];
+    memcpy(feats55,      feats_imu, sizeof(feats_imu));
+    memcpy(feats55 + 48, feats_ppg, sizeof(feats_ppg));
 
 #if ENABLE_SPECTRAL
     float spec7[7];
@@ -384,14 +386,12 @@ void maybeEmitOnce() {
                          gx_win, gy_win, gz_win,
                          spec7);
 
-    float feats55[55];
-    memcpy(feats55, feats48, sizeof(feats48));
-    memcpy(feats55 + 48, spec7, sizeof(spec7));
-    printFeaturesCSV(feats55, 55);
+    float feats62[62];
+    memcpy(feats62, feats55, sizeof(feats55));
+    memcpy(feats62 + 55, spec7, sizeof(spec7));
+    printFeaturesCSV(feats62, 62);
 #else
-    // ====== MODO ORIGINAL ======
-    printFeaturesCSV(feats48, 48);
-#endif
+    printFeaturesCSV(feats55, 55);
   }
 }
 

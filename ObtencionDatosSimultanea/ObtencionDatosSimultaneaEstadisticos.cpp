@@ -219,6 +219,7 @@ void printFeaturesCSV(const float* f, int n){
 }
 
 void maybeEmitOnce() {
+  if (imu_widx < IMU_WIN || ppg_widx < PPG_WIN) return;
   // ¿cuántos hops pendientes tiene cada flujo?
   unsigned long imu_hops = (imu_total > last_total_mpu) 
                            ? (imu_total - last_total_mpu) / (unsigned long)IMU_HOP : 0UL;
