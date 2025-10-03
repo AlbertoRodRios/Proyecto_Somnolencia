@@ -215,7 +215,7 @@ void computeMPUFeatures_fromCopies(float* out48,
 // ====== PRINT CSV ======
 void printFeaturesCSV(const float* f, int n){
   for(int i=0;i<n;++i){
-    Serial.print(f[i], FeaturesPerChannel);
+    Serial.print(f[i], 6);
     if (i<n-1) Serial.print(',');
   }
   Serial.println();
