@@ -21,6 +21,9 @@
 #define FeaturesPPG       FeaturesPerChannel         // 7
 #define TotalFeatures     FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
 #define USE_Python 1  // 1: enviar a Python; 0: enviar a Serial Monitor
+#define USE_IR     1  // 1: usar IR; 0: usar RED
+
+
 // Objetos
 MPU6500 mpu;
 MAX30105 ppg;
@@ -151,8 +154,11 @@ void ppgSample(){
 
   // Drenar TODO el FIFO disponible
   while (ppg.available()) {
-    uint32_t sample  = (float)ppg.getIR();
+    uint32_t ir  = ppg.getIR();
+    uint32_t red = ppg.getRed();
     ppg.nextSample();
+
+    float sample = USE_IR ? (float)ir : (float)red;
 
     if (ppg_widx >= PPG_WIN){
       // Desplaza por HOP
