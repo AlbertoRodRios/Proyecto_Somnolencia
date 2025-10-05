@@ -25,7 +25,7 @@
 
 // Defines
 #define PRINT_TIMESTAMP     0   // 1: agrega timestamp µs al inicio de cada fila emitida
-#define BADIOS              115200  // velocidad serial
+#define BAUDIOS             2000000 // velocidad serial
 #define FS_IMU_HZ           200    // IMU 200 Hz
 #define FS_PPG_HZ           100    // PPG 100 Hz
 #define WINDOW_SEC          2.0f   // 2 s
@@ -41,7 +41,7 @@
 #define TotalFeatures       FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
 #define USE_PYTHON          0  // 1: enviar a Python; 0: enviar a Serial Monitor
 #define USE_IR              1  // 1: usar IR; 0: usar RED
-#define DEBUG               1 // 1: debug info por Serial; 0: nada (No Usar con Python)
+#define DEBUG               0 // 1: debug info por Serial; 0: nada (No Usar con Python)
 
 // Objetos
 MPU6500 mpu;
@@ -497,6 +497,10 @@ void maybeEmitOnce() {
     memcpy(gz_win, gz_buf, sizeof gz_win);
     memcpy(ppg_win, ppg_buf, sizeof ppg_win);
 
+    // Primer tiempo
+    #if DEBUG
+    unsigned long t0 = esp_timer_get_time();
+    #endif
     // Features
     float feats_imu[FeaturesIMU];
     float feats_ppg[FeaturesPPG];
@@ -508,6 +512,7 @@ void maybeEmitOnce() {
     memcpy(feats55,      feats_imu, sizeof(feats_imu));
     memcpy(feats55 + 48, feats_ppg, sizeof(feats_ppg));
     float spec7[FeaturesPerChannel];
+    
     computeSpectralPlus7(ppg_win, PPG_WIN,
                          ax_win, ay_win, az_win, IMU_WIN,
                          gx_win, gy_win, gz_win,
@@ -517,9 +522,18 @@ void maybeEmitOnce() {
     memcpy(feats62, feats55, sizeof(feats55));
     memcpy(feats62 + 55, spec7, sizeof(spec7));
 
-    printFeaturesCSV(feats62, 62);
-
+    // Segundo tiempo
     #if DEBUG
+    unsigned long t1 = esp_timer_get_time();
+    #endif
+
+    // Emite CSV
+    printFeaturesCSV(feats62, 62);
+    // Tercer tiempo
+    #if DEBUG
+    unsigned long t2 = esp_timer_get_time();
+      Serial.printf("calc=%.1f ms, print=%.1f ms\n",
+                (t1-t0)/1000.0, (t2-t1)/1000.0);
       mark_emit();
     #endif
 
@@ -531,7 +545,8 @@ void maybeEmitOnce() {
 
 // Setup inicial
 void setup() {
-  Serial.begin(BADIOS); 
+  Serial.begin(BAUDIOS); 
+  Serial.setTxBufferSize(4096);
   delay(1000);
   Wire.begin(SDA_PIN, SCL_PIN); // inicia I2C
   Wire.setClock(400000); // 400 kHz
