@@ -21,8 +21,10 @@
 #include <string.h>   
 #include "esp_timer.h"
 #include <arduinoFFT.h>
+#include <limits.h>
 
 // Defines
+#define PRINT_TIMESTAMP     0   // 1: agrega timestamp µs al inicio de cada fila emitida
 #define BADIOS              115200  // velocidad serial
 #define FS_IMU_HZ           200    // IMU 200 Hz
 #define FS_PPG_HZ           100    // PPG 100 Hz
@@ -40,6 +42,41 @@
 #define USE_PYTHON          0  // 1: enviar a Python; 0: enviar a Serial Monitor
 #define USE_IR              1  // 1: usar IR; 0: usar RED
 #define DEBUG               1 // 1: debug info por Serial; 0: nada (No Usar con Python)
+
+// ====== Helpers de depuración ======
+#if DEBUG
+  // Macro: ejecuta cada N llamadas con un contador local/estático
+  #define DBG_EVERY(cntVar, N)  ( (++(cntVar) >= (N)) ? ((cntVar)=0, true) : false )
+
+  // Temporizador por tiempo (no por ticks)
+  static inline bool every_ms(uint32_t ms){
+    static uint32_t last=0; uint32_t now=millis();
+    if (now - last >= ms){ last = now; return true; }
+    return false;
+  }
+
+  // Estadísticos Welford de dt (µs)
+  struct TimerStats {
+    unsigned long n=0; double mean=0, M2=0; unsigned long minv=ULONG_MAX, maxv=0; unsigned long last=0;
+    inline void update(unsigned long now){ if(last==0){ last=now; return; } unsigned long dt=now-last; last=now; n++; double x=(double)dt; double d=x-mean; mean+=d/n; M2+=d*(x-mean); if(dt<minv)minv=dt; if(dt>maxv)maxv=dt; }
+    inline void dump(const char* tag){ double var=(n>1)?(M2/(n-1)):0.0; Serial.printf("[%s] n=%lu dt_mean=%.1f us std=%.1f min=%lu max=%lu\n", tag, n, mean, sqrt(var), minv, maxv); }
+  };
+  static TimerStats TS_IMU, TS_PPG;   // globales
+
+  // Monitoreo de backlogs y consumos
+  static volatile uint32_t imu_isr_ticks=0, ppg_isr_ticks=0;
+  static uint32_t imu_loop_consumed=0, ppg_loop_consumed=0;
+
+  // Watermarks de índices de escritura en ventana
+  static int imu_widx_max=0, ppg_widx_max=0;
+
+  // Perfil de emisión (cadencia de maybeEmitOnce)
+  static unsigned long last_emit_us=0;
+  static inline void mark_emit(){ unsigned long now=esp_timer_get_time(); if(last_emit_us){ unsigned long dt=now-last_emit_us; Serial.printf("Emit dt=%.1f ms\n", dt/1000.0); } last_emit_us=now; }
+
+  // Heap
+  extern "C" uint32_t esp_get_free_heap_size();
+#endif
 
 // Objetos
 MPU6500 mpu;
@@ -78,6 +115,8 @@ volatile unsigned long ppg_total = 0; // total muestras PPG
 
 static unsigned long last_total_mpu = 0; // para evitar backlog
 static unsigned long last_total_ppg = 0; // para evitar backlog
+static unsigned long last_emit_mpu = 0; // para debug
+static unsigned long last_emit_ppg = 0; // para debug
 
 // Parámetros FFT
 constexpr int N_PPG  = 256;   // 2 s @100 Hz (~200 -> zero-pad a 256)
@@ -162,34 +201,50 @@ inline float xcorr0(const float* a, const float* b, int n){
 void onIMUTick_task(void* /*arg*/) {
   portENTER_CRITICAL(&timerMux); // proteger variables compartidas
   imu_ready++; // flag para loop
+  #if DEBUG
+    imu_isr_ticks++; // conteo ISR
+  #endif
+  portEXIT_CRITICAL(&timerMux); // liberar mutex
 
   #if DEBUG
-    static unsigned long last = 0;
-    unsigned long now = esp_timer_get_time();
-    if (last != 0){
-      unsigned long dt = now - last;
-      Serial.print("IMU dt (us): "); Serial.println(dt);
-    }
-    last = now;
-  #endif
+    // Estadísticos de periodo (ligeros)
+    TS_IMU.update(esp_timer_get_time());
 
-  portEXIT_CRITICAL(&timerMux); // liberar mutex
+    // Tu debug existente cada 200 ticks (respetado)
+    static unsigned long last = 0; static int counter = 0;
+    if (DBG_EVERY(counter, 200)) { // ~1 s
+      unsigned long now = esp_timer_get_time();
+      if (last != 0){
+        unsigned long dt = now - last; float freq = 1e6f / (float)dt;
+        Serial.print("IMU dt (us): "); Serial.println(dt);
+        Serial.print("Frecuencia IMU: "); Serial.print(freq, 2); Serial.println(" Hz");
+      }
+      last = now;
+    }
+  #endif
 }
+
 void onPPGTick_task(void* /*arg*/){
   portENTER_CRITICAL(&timerMux); // proteger variables compartidas
   ppg_ready++; // flag para loop
+  #if DEBUG
+    ppg_isr_ticks++; // conteo ISR
+  #endif
+  portEXIT_CRITICAL(&timerMux); // liberar mutex
 
   #if DEBUG
-    static unsigned long last = 0;
-    unsigned long now = esp_timer_get_time();
-    if (last != 0){
-      unsigned long dt = now - last;
-      Serial.print("PPG dt (us): "); Serial.println(dt);
+    TS_PPG.update(esp_timer_get_time());
+    static unsigned long last = 0; static int counter = 0;
+    if (DBG_EVERY(counter, 100)) { // ~1 s
+      unsigned long now = esp_timer_get_time();
+      if (last != 0){
+        unsigned long dt = now - last; float freq = 1e6f / (float)dt;
+        Serial.print("PPG dt (us): "); Serial.println(dt);
+        Serial.print("Frecuencia PPG: "); Serial.print(freq, 2); Serial.println(" Hz");
+      }
+      last = now;
     }
-    last = now;
   #endif
-
-  portEXIT_CRITICAL(&timerMux); // liberar mutex
 }
 
 // Toma una muestra de la IMU y la almacena en el buffer circular
@@ -218,8 +273,9 @@ void imuSample(){
   imu_total++;
 
   #if DEBUG
+    if (imu_widx > imu_widx_max) imu_widx_max = imu_widx; // watermark
     static int count = 0;
-    if (count++ % 100 == 0) {
+    if ((++count % 100) == 0) {
       Serial.print("IMU sample: ax="); Serial.print(ax); 
       Serial.print(", ay="); Serial.print(ay);
       Serial.print(", az="); Serial.print(az);
@@ -228,7 +284,6 @@ void imuSample(){
       Serial.print(", gz="); Serial.println(gz);
     }
   #endif
-
 }
 
 // Toma muestras del PPG y las almacena en el buffer circular
@@ -253,11 +308,12 @@ void ppgSample(){
     ppg_total++;
   }
 
-   #if DEBUG
+  #if DEBUG
+    if (ppg_widx > ppg_widx_max) ppg_widx_max = ppg_widx; // watermark
     static int count = 0;
-    if (count++ % 100 == 0) {
+    if ((++count % 100) == 0) {
       Serial.print("PPG sample: ");
-      Serial.println(sample);
+      Serial.println(ppg_buf[(ppg_widx>0?ppg_widx-1:0)]);
     }
   #endif
 }
@@ -315,11 +371,14 @@ void computeMPUFeatures_fromCopies(float* out48,
     }
     Serial.println();
   #endif
-
 }
 
-// Print features as CSV line
+// Print features as CSV line (con opción de timestamp)
 void printFeaturesCSV(const float* f, int n){
+  #if PRINT_TIMESTAMP
+    unsigned long us = esp_timer_get_time();
+    Serial.print(us); Serial.print(',');
+  #endif
   for(int i=0;i<n;++i){
     Serial.print(f[i], 6);
     if (i<n-1) Serial.print(',');
@@ -425,24 +484,12 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
 void maybeEmitOnce() {
   if (imu_widx < IMU_WIN || ppg_widx < PPG_WIN) return; // no hay ventana completa
 
-  // Hops pendientes en cada flujo
-  unsigned long imu_hops = (imu_total > last_total_mpu) 
-                           ? (imu_total - last_total_mpu) / (unsigned long)IMU_HOP : 0UL;
-  unsigned long ppg_hops = (ppg_total > last_total_ppg) 
-                           ? (ppg_total - last_total_ppg) / (unsigned long)PPG_HOP : 0UL;
+  unsigned long imu_pending = (imu_total - last_emit_mpu);
+  unsigned long ppg_pending = (ppg_total - last_emit_ppg);
 
-  // Emite SOLO si ambos tienen ≥1 hop pendiente
-  if (imu_hops >= 1UL && ppg_hops >= 1UL) {
-    #if DEBUG
-      Serial.println("Emisión de ventana de características...");
-    #endif
-
-    // Avanza ambos contadores para descartar backlog completo (nos quedamos con la ventana más reciente)
-    unsigned long min_hops = (imu_hops < ppg_hops) ? imu_hops : ppg_hops;
-    last_total_mpu += min_hops * (unsigned long)IMU_HOP;
-    last_total_ppg += min_hops * (unsigned long)PPG_HOP;
-
-    // Copias locales de la última ventana COMPLETA
+  // ¿tenemos al menos un hop completo en ambos?
+  if (imu_pending >= (unsigned long)IMU_HOP && ppg_pending >= (unsigned long)PPG_HOP) {
+    // Copias locales
     memcpy(ax_win, ax_buf, sizeof ax_win);
     memcpy(ay_win, ay_buf, sizeof ay_win);
     memcpy(az_win, az_buf, sizeof az_win);
@@ -470,17 +517,16 @@ void maybeEmitOnce() {
     float feats62[TotalFeatures];
     memcpy(feats62, feats55, sizeof(feats55));
     memcpy(feats62 + 55, spec7, sizeof(spec7));
+
     printFeaturesCSV(feats62, 62);
+
     #if DEBUG
-      Serial.print("Total características: ");
-      Serial.println(TotalFeatures);
-      Serial.println("Features IMU + PPG + Espectrales:");
-      for (int i=0; i<TotalFeatures; i++) {
-        Serial.print(feats62[i], 6);
-        Serial.print(", ");
-      }
-      Serial.println();
+      mark_emit();
     #endif
+
+    // Actualiza índices y totales (1 hop exacto por flujo)
+    last_emit_mpu += (unsigned long)IMU_HOP;
+    last_emit_ppg += (unsigned long)PPG_HOP;
   }
 }
 
@@ -576,12 +622,40 @@ void loop() {
     imu_ready--;
     portEXIT_CRITICAL(&timerMux);
     imuSample();
+    #if DEBUG
+      imu_loop_consumed++;
+    #endif
   }
   while (ppg_ready > 0){
     portENTER_CRITICAL(&timerMux);
     ppg_ready--;
     portEXIT_CRITICAL(&timerMux);
     ppgSample();
+    #if DEBUG
+      ppg_loop_consumed++;
+    #endif
   }
+
   maybeEmitOnce();
+
+  // ====== Panel de salud 1 Hz (no intrusivo) ======
+  #if DEBUG
+    if (every_ms(1000)) {
+      uint32_t imu_isr = imu_isr_ticks; uint32_t ppg_isr = ppg_isr_ticks;
+      static uint32_t last_imu_isr=0, last_ppg_isr=0, last_imu_cons=0, last_ppg_cons=0;
+      uint32_t imu_isr_rate = imu_isr - last_imu_isr; uint32_t ppg_isr_rate = ppg_isr - last_ppg_isr;
+      uint32_t imu_cons_rate = imu_loop_consumed - last_imu_cons; uint32_t ppg_cons_rate = ppg_loop_consumed - last_ppg_cons;
+      last_imu_isr = imu_isr; last_ppg_isr = ppg_isr; last_imu_cons = imu_loop_consumed; last_ppg_cons = ppg_loop_consumed;
+
+      Serial.printf("IMU: ISR=%lu/s CONSUMED=%lu/s backlog=%ld\n", (unsigned long)imu_isr_rate, (unsigned long)imu_cons_rate, (long)imu_isr_rate-(long)imu_cons_rate);
+      Serial.printf("PPG: ISR=%lu/s CONSUMED=%lu/s backlog=%ld\n", (unsigned long)ppg_isr_rate, (unsigned long)ppg_cons_rate, (long)ppg_isr_rate-(long)ppg_cons_rate);
+
+      Serial.printf("WM: imu_widx_max=%d/%d  ppg_widx_max=%d/%d\n", imu_widx_max, IMU_WIN, ppg_widx_max, PPG_WIN);
+      TS_IMU.dump("IMU");
+      TS_PPG.dump("PPG");
+      Serial.printf("Free heap: %u bytes\n", (unsigned)esp_get_free_heap_size());
+      // reset watermarks cada segundo (opcional)
+      imu_widx_max = 0; ppg_widx_max = 0;
+    }
+  #endif
 }
