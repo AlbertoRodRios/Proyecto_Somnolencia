@@ -43,41 +43,6 @@
 #define USE_IR              1  // 1: usar IR; 0: usar RED
 #define DEBUG               1 // 1: debug info por Serial; 0: nada (No Usar con Python)
 
-// ====== Helpers de depuración ======
-#if DEBUG
-  // Macro: ejecuta cada N llamadas con un contador local/estático
-  #define DBG_EVERY(cntVar, N)  ( (++(cntVar) >= (N)) ? ((cntVar)=0, true) : false )
-
-  // Temporizador por tiempo (no por ticks)
-  static inline bool every_ms(uint32_t ms){
-    static uint32_t last=0; uint32_t now=millis();
-    if (now - last >= ms){ last = now; return true; }
-    return false;
-  }
-
-  // Estadísticos Welford de dt (µs)
-  struct TimerStats {
-    unsigned long n=0; double mean=0, M2=0; unsigned long minv=ULONG_MAX, maxv=0; unsigned long last=0;
-    inline void update(unsigned long now){ if(last==0){ last=now; return; } unsigned long dt=now-last; last=now; n++; double x=(double)dt; double d=x-mean; mean+=d/n; M2+=d*(x-mean); if(dt<minv)minv=dt; if(dt>maxv)maxv=dt; }
-    inline void dump(const char* tag){ double var=(n>1)?(M2/(n-1)):0.0; Serial.printf("[%s] n=%lu dt_mean=%.1f us std=%.1f min=%lu max=%lu\n", tag, n, mean, sqrt(var), minv, maxv); }
-  };
-  static TimerStats TS_IMU, TS_PPG;   // globales
-
-  // Monitoreo de backlogs y consumos
-  static volatile uint32_t imu_isr_ticks=0, ppg_isr_ticks=0;
-  static uint32_t imu_loop_consumed=0, ppg_loop_consumed=0;
-
-  // Watermarks de índices de escritura en ventana
-  static int imu_widx_max=0, ppg_widx_max=0;
-
-  // Perfil de emisión (cadencia de maybeEmitOnce)
-  static unsigned long last_emit_us=0;
-  static inline void mark_emit(){ unsigned long now=esp_timer_get_time(); if(last_emit_us){ unsigned long dt=now-last_emit_us; Serial.printf("Emit dt=%.1f ms\n", dt/1000.0); } last_emit_us=now; }
-
-  // Heap
-  extern "C" uint32_t esp_get_free_heap_size();
-#endif
-
 // Objetos
 MPU6500 mpu;
 MAX30105 ppg;
@@ -135,6 +100,41 @@ static FFTWork W_IMU { vReal_imu, vImag_imu, N_IMU, (float)FS_IMU_HZ, hann_imu }
 esp_timer_handle_t imu_timer; // timer para IMU
 esp_timer_handle_t ppg_timer; // timer para PPG
 portMUX_TYPE timerMux = portMUX_INITIALIZER_UNLOCKED; // mutex para variables compartidas
+
+// ====== Helpers de depuración ======
+#if DEBUG
+  // Macro: ejecuta cada N llamadas con un contador local/estático
+  #define DBG_EVERY(cntVar, N)  ( (++(cntVar) >= (N)) ? ((cntVar)=0, true) : false )
+
+  // Temporizador por tiempo (no por ticks)
+  static inline bool every_ms(uint32_t ms){
+    static uint32_t last=0; uint32_t now=millis();
+    if (now - last >= ms){ last = now; return true; }
+    return false;
+  }
+
+  // Estadísticos Welford de dt (µs)
+  struct TimerStats {
+    unsigned long n=0; double mean=0, M2=0; unsigned long minv=ULONG_MAX, maxv=0; unsigned long last=0;
+    inline void update(unsigned long now){ if(last==0){ last=now; return; } unsigned long dt=now-last; last=now; n++; double x=(double)dt; double d=x-mean; mean+=d/n; M2+=d*(x-mean); if(dt<minv)minv=dt; if(dt>maxv)maxv=dt; }
+    inline void dump(const char* tag){ double var=(n>1)?(M2/(n-1)):0.0; Serial.printf("[%s] n=%lu dt_mean=%.1f us std=%.1f min=%lu max=%lu\n", tag, n, mean, sqrt(var), minv, maxv); }
+  };
+  static TimerStats TS_IMU, TS_PPG;   // globales
+
+  // Monitoreo de backlogs y consumos
+  static volatile uint32_t imu_isr_ticks=0, ppg_isr_ticks=0;
+  static uint32_t imu_loop_consumed=0, ppg_loop_consumed=0;
+
+  // Watermarks de índices de escritura en ventana
+  static int imu_widx_max=0, ppg_widx_max=0;
+
+  // Perfil de emisión (cadencia de maybeEmitOnce)
+  static unsigned long last_emit_us=0;
+  static inline void mark_emit(){ unsigned long now=esp_timer_get_time(); if(last_emit_us){ unsigned long dt=now-last_emit_us; Serial.printf("Emit dt=%.1f ms\n", dt/1000.0); } last_emit_us=now; }
+
+  // Heap
+  extern "C" uint32_t esp_get_free_heap_size();
+#endif
 
 // Utilidades estadísticas
 //Calculo Raíz Media Cuadrática
@@ -406,8 +406,7 @@ inline int hz2bin(float f, float fs, int N) {
 // Fracción de energía en banda [f1,f2] con:
 // - media calculada SOLO sobre muestras válidas (sin contaminar por el padding)
 // - exclusión del bin DC (k=0) en Etot y en la banda
-float bandpower_frac_window(const float* x_win, int valid_n,
-                            const FFTWork& W, float f1, float f2) {
+static float bandpower_frac_window(const float* x_win, int valid_n, const FFTWork& W, float f1, float f2) {
   // 1) Media sólo de la parte válida
   float mu = 0.f;
   for (int i = 0; i < valid_n; ++i) mu += x_win[i];
@@ -482,7 +481,7 @@ void computeSpectralPlus7(const float* ppg_ir, int n_ppg,
 
 // Emite UNA ventana si ambos flujos tienen ≥1 hop pendiente
 void maybeEmitOnce() {
-  if (imu_widx < IMU_WIN || ppg_widx < PPG_WIN) return; // no hay ventana completa
+  if (imu_total < IMU_WIN || ppg_total < PPG_WIN) return; // no hay ventana completa
 
   unsigned long imu_pending = (imu_total - last_emit_mpu);
   unsigned long ppg_pending = (ppg_total - last_emit_ppg);
