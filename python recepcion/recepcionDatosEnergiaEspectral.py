@@ -3,8 +3,8 @@ import time
 
 # Modificar estos parámetros según sea necesario
 # Configuración inicial del puerto serial y archivo CSV
-PORT =  "COM3"  # Cambiar al puerto correcto si es necesario  
-BAUDIOS = 115200 # Velocidad de comunicación 
+PORT =  "COM5"  # Cambiar al puerto correcto si es necesario  
+BAUDIOS = 921600 # Velocidad de comunicación 
 FILENAME = "featuresSomnolencia.csv" # Nombre del archivo CSV
 
 # Configuración del estado (despierto o somnoliento)
@@ -85,7 +85,7 @@ with open(FILENAME, action, newline='', encoding="utf-8") as features_csv:
         time.sleep(0.1) 
     count = 0
     # Calcular el número máximo de filas según el tiempo deseado
-    MAX_ROWS = getRowsFromTime(300) #Limitar a N filas según tiempo en segundos
+    MAX_ROWS = getRowsFromTime(10) #Limitar a N filas según tiempo en segundos
     while count < MAX_ROWS:
         # Leer línea del serial y añadir etiqueta
         line = esp32.readline().decode(errors="ignore").strip()
