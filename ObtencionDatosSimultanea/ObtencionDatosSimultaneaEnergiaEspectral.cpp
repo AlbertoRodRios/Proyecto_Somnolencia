@@ -25,7 +25,7 @@
 
 // Defines
 #define PRINT_TIMESTAMP     0   // 1: agrega timestamp µs al inicio de cada fila emitida
-#define BAUDIOS             2000000 // velocidad serial
+#define BAUDIOS             921600 // velocidad serial
 #define FS_IMU_HZ           200    // IMU 200 Hz
 #define FS_PPG_HZ           100    // PPG 100 Hz
 #define WINDOW_SEC          2.0f   // 2 s
@@ -41,7 +41,7 @@
 #define TotalFeatures       FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
 #define USE_PYTHON          0  // 1: enviar a Python; 0: enviar a Serial Monitor
 #define USE_IR              1  // 1: usar IR; 0: usar RED
-#define DEBUG               0 // 1: debug info por Serial; 0: nada (No Usar con Python)
+#define DEBUG               0  // 1: debug info por Serial; 0: nada (No Usar con Python)
 
 // Objetos
 MPU6500 mpu;
@@ -527,8 +527,9 @@ void maybeEmitOnce() {
     unsigned long t1 = esp_timer_get_time();
     #endif
 
-    // Emite CSV
+    // Emisión
     printFeaturesCSV(feats62, 62);
+
     // Tercer tiempo
     #if DEBUG
     unsigned long t2 = esp_timer_get_time();
@@ -545,8 +546,8 @@ void maybeEmitOnce() {
 
 // Setup inicial
 void setup() {
+  Serial.setTxBufferSize(4096);   // <-- mover antes
   Serial.begin(BAUDIOS); 
-  Serial.setTxBufferSize(4096);
   delay(1000);
   Wire.begin(SDA_PIN, SCL_PIN); // inicia I2C
   Wire.setClock(400000); // 400 kHz

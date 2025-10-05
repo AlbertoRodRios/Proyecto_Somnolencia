@@ -1,8 +1,36 @@
 import serial, csv, os
 import time
+
+# Modificar estos parámetros según sea necesario
+# Configuración inicial del puerto serial y archivo CSV
+PORT =  "COM3"  # Cambiar al puerto correcto si es necesario  
+BAUDIOS = 115200 # Velocidad de comunicación 
+FILENAME = "featuresSomnolencia.csv" # Nombre del archivo CSV
+
+# Configuración del estado (despierto o somnoliento)
+AWAKE = True  # Cambiar a False si se quiere etiquetar como somnoliento
+
+# Metadata del experimento (ajustar según sea necesario)
+SUBJECT_ID = "S01"  # Cambiar por el ID real
+SESSION_ID = "SES01"  # Identificador de sesión
+EXPERIMENT_CONDITION = "normal"  # Condición experimental
+
+# Inicio de la sesión y contador de ventanas (no modificar)
+session_start_time = time.time() 
+window_counter = 0
+
+# Obtener fecha y hora actuales (no modificar)
+date_str = time.strftime("%Y-%m-%d")  # Fecha
+time_str = time.strftime("%H:%M:%S")  # Hora
+
+# Verificar si el archivo ya existe para decidir el modo de apertura
+file_exists = os.path.exists(FILENAME)
+action = 'a' if file_exists else 'w'
+
+
 # Función para escribir los encabezados en el archivo CSV
 def writeHeaders():
-    if not file_exists:
+    if not file_exists or os.path.getsize(FILENAME) == 0:
         headers = [
             # Metadata
             "subject_id", "session_id", "date", "time", "timestamp", 
@@ -32,46 +60,21 @@ def getRowsFromTime(seconds):
 def get_metadata():
     global window_counter
     metadata = [
-        subject_id,
-        session_id,
+        SUBJECT_ID,
+        SESSION_ID,
         date_str,
         time_str,
         time.time(),  # timestamp
         time.time() - session_start_time,  # session_duration
         window_counter,  # window_sequence_num
-        experiment_condition # experiment_condition
+        EXPERIMENT_CONDITION # experiment_condition
     ]
     window_counter += 1
     return metadata
-# Modificar estos parámetros según sea necesario
-# Configuración inicial del puerto serial y archivo CSV
-port =  "COM3"  # Cambiar al puerto correcto si es necesario  
-badios = 115200 # Velocidad de comunicación 
-filename = "featuresSomnolencia.csv" # Nombre del archivo CSV
-
-# Configuración del estado (despierto o somnoliento)
-awake = True  # Cambiar a False si se quiere etiquetar como somnoliento
-
-# Metadata del experimento (ajustar según sea necesario)
-subject_id = "S01"  # Cambiar por el ID real
-session_id = "SES01"  # Identificador de sesión
-experiment_condition = "normal"  # Condición experimental
-
-# Inicio de la sesión y contador de ventanas (no modificar)
-session_start_time = time.time() 
-window_counter = 0
-
-# Obtener fecha y hora actuales (no modificar)
-date_str = time.strftime("%Y-%m-%d")  # Fecha
-time_str = time.strftime("%H:%M:%S")  # Hora
-
-# Verificar si el archivo ya existe para decidir el modo de apertura
-file_exists = os.path.exists(filename)
-action = 'a' if file_exists else 'w'
 
 # Abrir el puerto serial y el archivo CSV
-esp32 = serial.Serial(port, badios, timeout=0.5)
-with open(filename, action, newline='', encoding="utf-8") as features_csv:
+esp32 = serial.Serial(PORT, BAUDIOS, timeout=0.5)
+with open(FILENAME, action, newline='', encoding="utf-8") as features_csv:
     writer = csv.writer(features_csv)
     writeHeaders() 
     # Esperar a que el ESP32 esté listo
@@ -86,13 +89,13 @@ with open(filename, action, newline='', encoding="utf-8") as features_csv:
     while count < MAX_ROWS:
         # Leer línea del serial y añadir etiqueta
         line = esp32.readline().decode(errors="ignore").strip()
-        line += ","
-        line += "1" if awake else "0"
-        # Añadir metadatos al inicio de cada línea
-        line = ",".join(map(str, get_metadata())) + "," + line
         # Si la línea está vacía, continuar
         if not line:
             continue
+        line += ","
+        line += "1" if AWAKE else "0"
+        # Añadir metadatos al inicio de cada línea
+        line = ",".join(map(str, get_metadata())) + "," + line
         # Escribir la línea en pantalla y en el archivo CSV
         print(f"{count}: {line}")
         writer.writerow(line.split(","))
