@@ -39,9 +39,9 @@
 #define FeaturesIMU         6 * FeaturesPerChannel + 6 // 42 + 6 xcorr
 #define FeaturesPPG         FeaturesPerChannel         // 7
 #define TotalFeatures       FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
-#define USE_PYTHON          1  // 1: enviar a Python; 0: enviar a Serial Monitor
+#define USE_PYTHON          0  // 1: enviar a Python; 0: enviar a Serial Monitor
 #define USE_IR              1  // 1: usar IR; 0: usar RED
-#define DEBUG               0  // 1: debug info por Serial; 0: nada (No Usar con Python)
+#define DEBUG               1  // 1: debug info por Serial; 0: nada (No Usar con Python)
 
 // Objetos
 MPU6500 mpu;
