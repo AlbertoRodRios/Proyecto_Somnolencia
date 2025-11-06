@@ -501,24 +501,35 @@ void maybeEmitOnce() {
     #if DEBUG
     unsigned long t0 = esp_timer_get_time();
     #endif
+    
     // Features
-    float feats_imu[FeaturesIMU];
-    float feats_ppg[FeaturesPPG];
+    // ===== MODIFICACIÓN =====
+    // Declarar como 'static' para evitar desbordamiento de pila
+    static float feats_imu[FeaturesIMU];
+    static float feats_ppg[FeaturesPPG];
+    // ========================
     computeMPUFeatures_fromCopies(feats_imu, ax_win, ay_win, az_win, gx_win, gy_win, gz_win);
     computePPGFeatures_fromCopies(feats_ppg, ppg_win, PPG_WIN);
 
     // Concatena y emite una sola fila (62 features)
-    float feats55[FeaturesIMU + FeaturesPPG];
+    // ===== MODIFICACIÓN =====
+    static float feats55[FeaturesIMU + FeaturesPPG];
+    // ========================
     memcpy(feats55,      feats_imu, sizeof(feats_imu));
     memcpy(feats55 + 48, feats_ppg, sizeof(feats_ppg));
-    float spec7[FeaturesPerChannel];
+    
+    // ===== MODIFICACIÓN =====
+    static float spec7[FeaturesPerChannel];
+    // ========================
     
     computeSpectralPlus7(ppg_win, PPG_WIN,
                          ax_win, ay_win, az_win, IMU_WIN,
                          gx_win, gy_win, gz_win,
                          spec7);
 
-    float feats62[TotalFeatures];
+    // ===== MODIFICACIÓN =====
+    static float feats62[TotalFeatures];
+    // ========================
     memcpy(feats62, feats55, sizeof(feats55));
     memcpy(feats62 + 55, spec7, sizeof(spec7));
 
@@ -534,7 +545,7 @@ void maybeEmitOnce() {
     #if DEBUG
     unsigned long t2 = esp_timer_get_time();
       Serial.printf("calc=%.1f ms, print=%.1f ms\n",
-                (t1-t0)/1000.0, (t2-t1)/1000.0);
+                  (t1-t0)/1000.0, (t2-t1)/1000.0);
       mark_emit();
     #endif
 
