@@ -2,7 +2,7 @@ import serial, csv, os
 import time
 
 # --- Configuration ---
-PORT = "COM6"
+PORT = "COM7"
 BAUDIOS = 115200 
 FILENAME = "featuresSomnolencia.csv"
 AWAKE = False
