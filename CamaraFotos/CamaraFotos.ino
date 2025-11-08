@@ -5,6 +5,8 @@
 #define CAMERA_MODEL_WROVER_KIT
 #include "camera_pins.h"
 
+int EYES_Y = 60;
+
 void setup() {
   Serial.begin(115200);
   
@@ -96,31 +98,92 @@ void createDir(fs::FS &fs, const char * path) {
   }
 }
 
+camera_fb_t* cropLeftEye(camera_fb_t* original_fb) {
+  // Tamaño fijo para el recorte del ojo
+  int eye_height = 100;  // Alto del recorte del ojo}
+  int eye_width = 240;
+
+  // Centrar el recorte en el ojo izquierdo
+  int start_x = 0;
+  int start_y = EYES_Y;
+
+  start_y = min(start_y, (int)(original_fb->height - eye_height));
+
+  Serial.printf("Recortando ojo izquierdo: (%d, %d) tamaño %dx%d\n", 
+                start_x, start_y, eye_width, eye_height);
+
+  // Crear nuevo buffer para la imagen recortada
+  size_t crop_size = eye_width * eye_height;
+  uint8_t* crop_buf = (uint8_t*)ps_malloc(crop_size);
+  
+  if (crop_buf == NULL) {
+    Serial.println("Error asignando memoria para recorte");
+    return NULL;
+  }
+
+  // Copiar región recortada
+  for (int y = 0; y < eye_height; y++) {
+    for (int x = 0; x < eye_width; x++) {
+      int orig_index = (start_y + y) * original_fb->width + (start_x + x);
+      int crop_index = y * eye_width + x;
+      crop_buf[crop_index] = original_fb->buf[orig_index];
+    }
+  }
+
+  // Crear nueva estructura camera_fb_t para la imagen recortada
+  camera_fb_t* cropped_fb = (camera_fb_t*)ps_malloc(sizeof(camera_fb_t));
+  if (cropped_fb == NULL) {
+    free(crop_buf);
+    Serial.println("Error asignando memoria para cropped_fb");
+    return NULL;
+  }
+
+  cropped_fb->width = eye_width;
+  cropped_fb->height = eye_height;
+  cropped_fb->buf = crop_buf;
+  cropped_fb->len = crop_size;
+  cropped_fb->format = original_fb->format;
+  
+  return cropped_fb;
+}
+
 // 💾 GUARDAR IMAGEN EN SD
 bool saveImageToSD(camera_fb_t * fb) {
-  String path = "/images/image_" + String(millis()) + ".raw";
+  // Primero recortar la imagen
+  camera_fb_t* cropped_fb = cropLeftEye(fb);
   
-  // Serial.printf("Guardando imagen: %s\n", path.c_str());
+  if (cropped_fb == NULL) {
+    Serial.println("No se pudo recortar, guardando imagen completa");
+    return saveAsPGM(fb); // Guardar original si no se puede recortar
+  }
+
+  String path = "/images/cropped_" + String(millis()) + ".pgm";
   
-  // File file = SD_MMC.open(path.c_str(), FILE_WRITE);
-  // if(!file) {
-  //   Serial.println("Error abriendo archivo para escritura");
-  //   return false;
-  // }
+  File file = SD_MMC.open(path.c_str(), FILE_WRITE);
+  if(!file) {
+    Serial.println("Error abriendo archivo PGM");
+    free(cropped_fb->buf);
+    free(cropped_fb);
+    return false;
+  }
   
-  // // Escribir datos RAW de escala de grises
-  // size_t written = file.write(fb->buf, fb->len);
-  // file.close();
+  // Cabecera PGM para imagen recortada
+  file.print("P5\n");
+  file.print(cropped_fb->width);
+  file.print(" ");
+  file.print(cropped_fb->height);
+  file.print("\n255\n");
   
-  // if(written != fb->len) {
-  //   Serial.printf("Error: Escritos %zu de %zu bytes\n", written, fb->len);
-  //   return false;
-  // }
+  // Datos de la imagen recortada
+  file.write(cropped_fb->buf, cropped_fb->len);
+  file.close();
   
-  // Serial.printf("✅ Imagen grayscale guardada: %s\n", path.c_str());
-  
-  // ✅ este si sirve
-  saveAsPGM(fb);
+  Serial.printf("✅ Imagen RECORTADA guardada: %s (%dx%d)\n", 
+                path.c_str(), cropped_fb->width, cropped_fb->height);
+
+  // Liberar memoria de la imagen recortada
+  free(cropped_fb->buf);
+  free(cropped_fb);
   
   return true;
 }
@@ -193,5 +256,4 @@ void loop() {
   esp_camera_fb_return(fb);
   fb = NULL;
   
-  delay(1000); 
 }
