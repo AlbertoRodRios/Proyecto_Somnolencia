@@ -2,7 +2,7 @@
 #include "FS.h"
 #include "SD_MMC.h"
 
-#define CAMERA_MODEL_WROVER_KIT
+#define CAMERA_MODEL_AI_THINKER
 #include "camera_pins.h"
 
 int EYES_Y = 60;
@@ -59,7 +59,7 @@ void initSDCard() {
   Serial.println("Inicializando tarjeta SD...");
   
   // Inicializar SD_MMC en modo 1-bit (requerido para ESP32-CAM)
-  if(!SD_MMC.begin("/sdcard", true)) {
+if(!SD_MMC.begin()) {
     Serial.println("Error al montar SD_MMC");
     return;
   }
@@ -85,7 +85,7 @@ void initSDCard() {
   Serial.printf("Tamaño de SD: %lluMB\n", cardSize);
   
   // Crear directorio de imágenes si no existe
-  createDir(SD_MMC, "/images");
+  createDir(SD_MMC, "/sdcard/images");
 }
 
 // 📁 CREAR DIRECTORIO
@@ -151,14 +151,13 @@ camera_fb_t* cropLeftEye(camera_fb_t* original_fb) {
 bool saveImageToSD(camera_fb_t * fb) {
   // Primero recortar la imagen
   camera_fb_t* cropped_fb = cropLeftEye(fb);
-  
+
   if (cropped_fb == NULL) {
     Serial.println("No se pudo recortar, guardando imagen completa");
-    return saveAsPGM(fb); // Guardar original si no se puede recortar
+    return saveAsPGM(fb);
   }
 
-  String path = "/images/cropped_" + String(millis()) + ".pgm";
-  
+  String path = "/sdcard/images/cropped_" + String(millis()) + ".pgm";
   File file = SD_MMC.open(path.c_str(), FILE_WRITE);
   if(!file) {
     Serial.println("Error abriendo archivo PGM");
@@ -189,7 +188,7 @@ bool saveImageToSD(camera_fb_t * fb) {
 }
 
 bool saveAsPGM(camera_fb_t * fb) {
-  String path = "/images/image_" + String(millis()) + ".pgm";
+  String path = "/sdcard/images/image_" + String(millis()) + ".pgm";
   
   File file = SD_MMC.open(path.c_str(), FILE_WRITE);
   if(!file) {
