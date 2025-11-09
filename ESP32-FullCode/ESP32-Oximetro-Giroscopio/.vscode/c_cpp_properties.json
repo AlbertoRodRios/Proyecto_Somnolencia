@@ -1,0 +1,13 @@
+{
+  "configurations": [
+    {
+      "name": "Win32",
+      "includePath": [
+        "${workspaceFolder}/**",
+        "C:\\Users\\Kristan\\AppData\\Local\\Arduino15\\packages\\esp32\\hardware\\esp32\\3.3.0\\**"
+      ],
+      "defines": ["_DEBUG", "UNICODE", "_UNICODE"]
+    }
+  ],
+  "version": 4
+}
