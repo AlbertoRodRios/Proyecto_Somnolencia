@@ -2,10 +2,10 @@ import serial, csv, os
 import time
 
 # --- Configuration ---
-PORT = "COM7"
+PORT = "COM8"
 BAUDIOS = 115200 
 FILENAME = "featuresSomnolencia.csv"
-AWAKE = False
+AWAKE = True
 SUBJECT_ID = "S02"
 SESSION_ID = "SES03"
 EXPERIMENT_CONDITION = "normal"
