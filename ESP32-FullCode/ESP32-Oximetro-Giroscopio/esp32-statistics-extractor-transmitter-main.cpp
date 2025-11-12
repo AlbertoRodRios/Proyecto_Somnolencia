@@ -3,7 +3,7 @@
 // Extrae características estadísticas y espectrales en ventanas deslizantes
 // - IMU: acelerómetro y giróscopo a 200 Hz
 // - PPG: MAX30102 (IR o RED) a 100 Hz
-// - Ventanas de 2 s con 50% de solapamiento
+// - Ventanas de 4 s con 50% de solapamiento
 // - Características estadísticas: RMS, varianza, energía, pico a pico, asimetría, curtosis y media (7 por canal)
 // - Características espectrales: fracción de energía en bandas específicas (7 en total
 //   - PPG: 0.10-0.40 Hz, 0.70-3.00 Hz, 3.00-5.00 Hz
@@ -22,7 +22,7 @@
 #include "esp_timer.h"
 #include <arduinoFFT.h>
 #include <limits.h>
-#include "esp_now_reciever.h" // Import all our ESP-NOW functions
+#include "esp_now_transmitter.h" 
 
 // Defines
 #define PRINT_TIMESTAMP     0   // 1: agrega timestamp µs al inicio de cada fila emitida
@@ -40,9 +40,11 @@
 #define FeaturesIMU         6 * FeaturesPerChannel + 6 // 42 + 6 xcorr
 #define FeaturesPPG         FeaturesPerChannel         // 7
 #define TotalFeatures       FeaturesIMU + FeaturesPPG + FeaturesPerChannel // 55 + 7 espectrales
-#define USE_PYTHON          1  // 1: enviar a Python; 0: enviar a Serial Monitor
+#define USE_PYTHON          0  // 1: enviar a Python; 0: enviar a Serial Monitor
 #define USE_IR              1  // 1: usar IR; 0: usar RED
-#define DEBUG               0  // 1: debug info por Serial; 0: nada (No Usar con Python)
+#define DEBUG               1  // 1: debug info por Serial; 0: nada (No Usar con Python)
+
+uint8_t receiverMACAddress[] = {0x04, 0x83, 0x08, 0x76, 0x3A, 0xD8};
 
 // Objetos
 MPU6500 mpu;
@@ -63,6 +65,7 @@ constexpr int IMU_WIN = int(WINDOW_SEC * FS_IMU_HZ);      // 2s -> 400
 constexpr int IMU_HOP = int(IMU_WIN * (1.0f - OVERLAP));  // 200
 constexpr int PPG_WIN = int(WINDOW_SEC * FS_PPG_HZ);      // 2s -> 200
 constexpr int PPG_HOP = int(PPG_WIN * (1.0f - OVERLAP));  // 100
+
 
 // Buffers y variables globales
 static float ax_win[IMU_WIN], ay_win[IMU_WIN], az_win[IMU_WIN];
@@ -540,7 +543,10 @@ void maybeEmitOnce() {
     #endif
 
     // Emisión
-    printFeaturesCSV(feats62, 62);
+    //printFeaturesCSV(feats62, 62);
+    packetData myData;
+    memcpy(myData.features, feats62, sizeof(myData.features)); 
+    send_data_packet(&myData);
 
     // Tercer tiempo
     #if DEBUG
@@ -639,6 +645,7 @@ void setup() {
   // Precomputar ventanas Hann
   precomputeHann(hann_ppg, N_PPG);
   precomputeHann(hann_imu, N_IMU);
+  setup_esp_now_transmitter(receiverMACAddress);
 }
 
 // Loop principal

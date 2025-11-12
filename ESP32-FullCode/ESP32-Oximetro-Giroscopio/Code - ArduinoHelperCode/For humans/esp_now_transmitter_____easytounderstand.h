@@ -1,9 +1,13 @@
-#ifndef ESP_NOW_SENDER_H
-#define ESP_NOW_SENDER_H
+// This is the new file/tab: esp_now_transmitter.h
+
+#ifndef ESP_NOW_TRANSMITTER_H
+#define ESP_NOW_TRANSMITTER_H
 
 #include <esp_now.h>
 #include <WiFi.h>
 
+// 1. Define the Data Structure
+// This MUST be identical on both the Transmitter and Receiver
 typedef struct packetData {
   float dormido;
 } packetData;
@@ -15,7 +19,10 @@ void OnDataSent(const uint8_t *mac_addr, esp_now_send_status_t status) {
   Serial.println(status == ESP_NOW_SEND_SUCCESS ? "Delivery Success" : "Delivery Fail");
 }
 
-void setup_esp_now_sender(uint8_t *peer_mac) {
+// 3. The Main Setup Function
+// This is called once from your main .ino's setup()
+void setup_esp_now_transmitter(uint8_t *peer_mac) {
+  // Set ESP32 to Station mode
   WiFi.mode(WIFI_STA);
   // Initialize ESP-NOW
   if (esp_now_init() != ESP_OK) {
@@ -43,4 +50,4 @@ void send_data_packet(const packetData *data) {
   }
 }
 
-#endif // ESP_NOW_SENDER_H
+#endif // ESP_NOW_TRANSMITTER_H

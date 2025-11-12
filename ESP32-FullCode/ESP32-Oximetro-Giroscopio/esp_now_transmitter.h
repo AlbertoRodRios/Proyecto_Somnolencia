@@ -1,17 +1,15 @@
-// This is the new file/tab: esp_now_sender.h
+// This is the new file/tab: esp_now_transmitter.h
 
-#ifndef ESP_NOW_SENDER_H
-#define ESP_NOW_SENDER_H
+#ifndef ESP_NOW_TRANSMITTER_H
+#define ESP_NOW_TRANSMITTER_H
 
 #include <esp_now.h>
 #include <WiFi.h>
 
 // 1. Define the Data Structure
-// This MUST be identical on both the Sender and Receiver
+// This MUST be identical on both the Transmitter and Receiver
 typedef struct packetData {
-  float num1;
-  float num2;
-  float num3;
+    float features[62];
 } packetData;
 
 // Variable to store the peer info
@@ -37,7 +35,7 @@ void OnDataSent(const wifi_tx_info_t *tx_info, esp_now_send_status_t status) {
 
 // 3. The Main Setup Function (UPDATED)
 // This is called once from your main .ino's setup()
-void setup_esp_now_sender(uint8_t *peer_mac) {
+void setup_esp_now_transmitter(uint8_t *peer_mac) {
   // Set ESP32 to Station mode
   WiFi.mode(WIFI_STA);
   Serial.println("Wi-Fi Mode set to Station.");
@@ -81,12 +79,6 @@ void setup_esp_now_sender(uint8_t *peer_mac) {
 // This is called from your main .ino's loop()
 void send_data_packet(const packetData *data) {
   
-  // Print the data we are about to send
-  Serial.println("  Sending data:");
-  Serial.print("    Float 1: "); Serial.println(data->num1);
-  Serial.print("    Float 2: "); Serial.println(data->num2);
-  Serial.print("    Float 3: "); Serial.println(data->num3);
-  Serial.print("    Size: "); Serial.println(sizeof(packetData));
 
   // Send the data
   esp_err_t result = esp_now_send(peerInfo.peer_addr, (uint8_t *) data, sizeof(packetData));
@@ -100,4 +92,4 @@ void send_data_packet(const packetData *data) {
   // The *actual* delivery status will arrive later in the OnDataSent callback
 }
 
-#endif // ESP_NOW_SENDER_H
+#endif // ESP_NOW_TRANSMITTER_H

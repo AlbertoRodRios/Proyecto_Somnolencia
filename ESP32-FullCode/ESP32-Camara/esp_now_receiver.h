@@ -7,10 +7,7 @@
 // 1. Define the Data Structure (ACTUALIZADO)
 // This MUST be identical on both the Sender and Receiver
 typedef struct packetData {
-  float perclos;
-  float blinks_per_min;
-  float close_duration;
-  int current_state;
+  float features[62];
 } packetData;
 
 // 2. Create Global Variables

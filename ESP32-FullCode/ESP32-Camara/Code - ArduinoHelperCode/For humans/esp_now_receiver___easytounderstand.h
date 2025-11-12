@@ -4,6 +4,8 @@
 #include <esp_now.h>
 #include <WiFi.h>
 
+// 1. Define the Data Structure
+// This MUST be identical on both the Transmitter and Receiver
 typedef struct packetData {
   float Num1;
 } packetData;
