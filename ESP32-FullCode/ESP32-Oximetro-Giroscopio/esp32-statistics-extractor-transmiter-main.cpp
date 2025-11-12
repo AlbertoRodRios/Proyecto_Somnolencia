@@ -44,7 +44,7 @@
 #define USE_IR              1  // 1: usar IR; 0: usar RED
 #define DEBUG               1  // 1: debug info por Serial; 0: nada (No Usar con Python)
 
-const uint8_t receiverMACAddress[] = {0x04, 0x83, 0x08, 0x76, 0x3A, 0xD8};
+uint8_t receiverMACAddress[] = {0x04, 0x83, 0x08, 0x76, 0x3A, 0xD8};
 
 // Objetos
 MPU6500 mpu;
@@ -545,7 +545,7 @@ void maybeEmitOnce() {
     // Emisión
     //printFeaturesCSV(feats62, 62);
     packetData myData;
-    myData.features = feats62;
+    memcpy(myData.features, feats62, sizeof(myData.features)); 
     send_data_packet(&myData);
 
     // Tercer tiempo
