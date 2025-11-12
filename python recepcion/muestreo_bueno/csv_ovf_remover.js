@@ -5,6 +5,7 @@
  */
 import path from "path";
 import fs from "fs";
+import { createGunzip } from "zlib";
 
 const CSV_FILENAME = "./featuresSomnolencia_full_2900.csv";
 
@@ -20,12 +21,14 @@ const goodLines = lines.filter(currentLine => {
 });
 
 if (goodLines.length > 0) {
-  const newName = CSV_FILENAME.replace(path.extname(CSV_FILENAME), "") + "_NO_OSF.csv";
+  const newFilePathName = CSV_FILENAME.replace(path.extname(CSV_FILENAME), "") + "_NO_OSF.csv";
 
-  if ()
-
-
-  console.log(newName);
+  if (fs.existsSync(newFilePathName)) {
+    fs.rmSync(newFilePathName);
+  }
+  fs.writeFileSync(newFilePathName, goodLines.join("\n"));
+  console.log(newFilePathName);
+  console.log("CREATED STUFF");
 }
 
 console.log(goodLines.length);
