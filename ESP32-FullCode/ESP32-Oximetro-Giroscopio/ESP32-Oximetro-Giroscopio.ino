@@ -3,7 +3,7 @@
 // Extrae características estadísticas y espectrales en ventanas deslizantes
 // - IMU: acelerómetro y giróscopo a 200 Hz
 // - PPG: MAX30102 (IR o RED) a 100 Hz
-// - Ventanas de 2 s con 50% de solapamiento
+// - Ventanas de 4 s con 50% de solapamiento
 // - Características estadísticas: RMS, varianza, energía, pico a pico, asimetría, curtosis y media (7 por canal)
 // - Características espectrales: fracción de energía en bandas específicas (7 en total
 //   - PPG: 0.10-0.40 Hz, 0.70-3.00 Hz, 3.00-5.00 Hz
@@ -22,7 +22,6 @@
 #include "esp_timer.h"
 #include <arduinoFFT.h>
 #include <limits.h>
-#include "esp_now_reciever.h" // Import all our ESP-NOW functions
 
 // Defines
 #define PRINT_TIMESTAMP     0   // 1: agrega timestamp µs al inicio de cada fila emitida
