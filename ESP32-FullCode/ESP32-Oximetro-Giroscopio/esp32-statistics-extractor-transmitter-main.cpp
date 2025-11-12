@@ -645,7 +645,7 @@ void setup() {
   // Precomputar ventanas Hann
   precomputeHann(hann_ppg, N_PPG);
   precomputeHann(hann_imu, N_IMU);
-  setup_esp_now_sender(receiverMACAddress);
+  setup_esp_now_transmitter(receiverMACAddress);
 }
 
 // Loop principal

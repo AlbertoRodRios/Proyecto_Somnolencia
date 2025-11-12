@@ -1,9 +1,9 @@
-// This is your main .ino file (e.g., Sender_Main.ino)
+// This is your main .ino file (e.g., Transmitter_Main.ino)
 
-#include "esp_now_sender.h" // Import all our ESP-NOW functions
+#include "esp_now_transmitter.h" // Import all our ESP-NOW functions
 
 // !! IMPORTANT !!
-// REPLACE THIS with the MAC address of your Receiver board]
+// REPLACE THIS with the MAC address of your Receiver board
 //RECEIVER MAC ADDRESS: 04:83:08:75:93:EC
 uint8_t receiverMACAddress[] = {0x04, 0x83, 0x08, 0x75, 0x93, 0xEC};
 
@@ -11,7 +11,7 @@ void setup() {
   Serial.begin(115200);
 
   // Call the single setup function from our new header
-  setup_esp_now_sender(receiverMACAddress);
+  setup_esp_now_transmitter(receiverMACAddress);
 
   // --- ADD YOUR OTHER SETUP CODE HERE ---
   // (e.g., camera init, pin setup, etc.)

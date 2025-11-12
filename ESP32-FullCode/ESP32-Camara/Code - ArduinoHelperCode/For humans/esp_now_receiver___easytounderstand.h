@@ -1,13 +1,13 @@
 // This is the new file/tab: esp_now_receiver.h
 
-#ifndef ESP_NOW_RECIEVER_H
-#define ESP_NOW_RECIEVER_H
+#ifndef ESP_NOW_RECEIVER_H
+#define ESP_NOW_RECEIVER_H
 
 #include <esp_now.h>
 #include <WiFi.h>
 
 // 1. Define the Data Structure
-// This MUST be identical on both the Sender and Receiver
+// This MUST be identical on both the Transmitter and Receiver
 typedef struct packetData {
   float num1;
   float num2;
