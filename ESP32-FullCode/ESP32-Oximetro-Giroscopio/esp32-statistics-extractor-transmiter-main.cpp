@@ -22,7 +22,7 @@
 #include "esp_timer.h"
 #include <arduinoFFT.h>
 #include <limits.h>
-#include "esp_now_transmiter.h" 
+#include "esp_now_transmitter.h" 
 
 // Defines
 #define PRINT_TIMESTAMP     0   // 1: agrega timestamp µs al inicio de cada fila emitida
@@ -547,7 +547,7 @@ void maybeEmitOnce() {
     packetData myData;
     myData.features = feats62;
     send_data_packet(&myData);
-       
+
     // Tercer tiempo
     #if DEBUG
     unsigned long t2 = esp_timer_get_time();

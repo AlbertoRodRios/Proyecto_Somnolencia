@@ -1,7 +1,7 @@
 // This is the new file/tab: esp_now_sender.h
 
-#ifndef ESP_NOW_SENDER_H
-#define ESP_NOW_SENDER_H
+#ifndef ESP_NOW_TRANSMITTER_H
+#define ESP_NOW_TRANSMITTER_H
 
 #include <esp_now.h>
 #include <WiFi.h>
