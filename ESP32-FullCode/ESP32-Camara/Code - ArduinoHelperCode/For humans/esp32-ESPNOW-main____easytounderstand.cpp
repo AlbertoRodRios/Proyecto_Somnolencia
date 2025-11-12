@@ -1,6 +1,6 @@
 // This is your main .ino file (e.g., Receiver_Main.ino)
 
-#include "esp_now_receiver.h" // Import all our ESP-NOW functions
+#include "esp_now_reciever.h" // Import all our ESP-NOW functions
 
 void setup() {
   Serial.begin(115200);
