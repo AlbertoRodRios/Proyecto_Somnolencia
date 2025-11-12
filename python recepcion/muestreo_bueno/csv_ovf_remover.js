@@ -9,10 +9,14 @@ import { createGunzip } from "zlib";
 
 const CSV_FILENAME = "./featuresSomnolencia_full_2900.csv";
 
-const lines = fs.readFileSync(CSV_FILENAME).toString().split("\n").slice(1);
+const lines = fs.readFileSync(CSV_FILENAME).toString().split("\n");
 
 /** @type {string[]} */
-const goodLines = lines.filter(currentLine => {
+const goodLines = lines.filter((currentLine, index) => {
+  if (index === 0) {
+    return true;
+  }
+
   const loweredCase = currentLine.toLowerCase();
   if (loweredCase.includes("ovf")) {
     return false;

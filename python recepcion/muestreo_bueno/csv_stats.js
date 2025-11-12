@@ -8,13 +8,17 @@ import fs from "fs";
 
 //! CHANGE FILE PATH TO ANALIZE CSV STATISTICS
 /** @type {string[]} */
-const lines = fs.readFileSync("./featuresSomnolencia_full_2900.csv").toString().split("\n").slice(1);
+const lines = fs.readFileSync("./featuresSomnolencia_full_2900_NO_OSF.csv").toString().split("\n").slice(1);
 
 /** @type {Map<string, {awakeCount:number, sleepCount: number}>} */
 const usersMap = new Map();
 lines.forEach(current => {
   const byColumns = current.split(",");
   const user = byColumns[0];
+  if (user === "") {
+    return;
+  }
+
   if (!usersMap.has(user)) {
     usersMap.set(user, {
       awakeCount: 0,
@@ -22,9 +26,13 @@ lines.forEach(current => {
     });
   }
   const currentLineTrimed = current.trim();
+  if (currentLineTrimed === "") {
+    return;
+  }
   const lastChar = currentLineTrimed.at(-1);
   const awake = lastChar === "0" ? false : lastChar === "1" ? true : null;
   if (awake === null) {
+    console.log("here " + currentLineTrimed);
     throw "WTF THIS SHOULDN'T HAPPEN";
   }
   const actualUserRegistry = usersMap.get(user);
